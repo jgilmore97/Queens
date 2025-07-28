@@ -418,7 +418,7 @@ def expand_board_dataset(seed_dataset, target_size=5000):
                     board_key = hash_board(base_region)
                     fail_streak[board_key] += 1
                     if fail_streak[board_key] >= 5:
-                        print(f"⚠️  Board {root_source} (iter {parent_iter}) "
+                        print(f"Board {root_source} (iter {parent_iter}) "
                               "has failed to mutate in 5 consecutive rounds.")
                     next_pool.append(entry)
                     continue
@@ -455,7 +455,7 @@ def expand_board_dataset(seed_dataset, target_size=5000):
                 fail_streak.pop(hash_board(base_region), None)
 
             except Exception as e:
-                print(f"⚠️  Error mutating {root_source} (iter {parent_iter}): {e}")
+                print(f"Error mutating {root_source} (iter {parent_iter}): {e}")
                 next_pool.append(entry)  # keep for another try
 
         print(f"Round {round_count} complete: {successes} new boards.")
@@ -465,7 +465,7 @@ def expand_board_dataset(seed_dataset, target_size=5000):
 
         available_pool = next_pool   # advance to next generation
 
-    print(f"\n🎉 Finished: {len(generated_dataset)} boards generated.\n")
+    print(f"\n Finished: {len(generated_dataset)} boards generated.\n")
     print("Offspring per seed:")
     for seed, count in offspring_counter.items():
         print(f"  {seed}: {count}")
@@ -519,7 +519,7 @@ def save_stateless_dataset_json(dataset, save_path):
     with open(save_path, "w") as f:
         json.dump(serializable_data, f)
 
-    print(f"✅ Saved dataset to {save_path}")
+    print(f"Saved dataset to {save_path}")
 
 #-----------------------------------------------------------------------------------------------------
 # Below functions perform data augmentation by rotating the board and queen positions.
