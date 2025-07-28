@@ -34,7 +34,7 @@ def main_training():
     
     # Override specific settings if needed
     config.data.train_json = "10k_training_set_with_states.json"
-    config.data.test_json = "test_set_with_states.json"  # Keep for future use
+    config.data.test_json = "test_set_with_states.json"
     config.training.epochs = 30
     config.training.batch_size = 512
     
