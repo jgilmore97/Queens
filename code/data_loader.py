@@ -12,38 +12,148 @@ import torch
 from torch_geometric.data import Data, Dataset 
 from torch_geometric.loader import DataLoader
 
-def _build_edge_index(region: np.ndarray) -> torch.Tensor:
-    """Return undirected edge_index tensor capturing Queens constraints."""
+
+class EdgeIndexCache:
+    """Cache for pre-computed structural edges (rows, cols, diagonals) by board size."""
+    
+    def __init__(self):
+        self._cache: Dict[int, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    
+    def get_structural_edges(self, n: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Get pre-computed row, column, and diagonal edges for board size n."""
+        if n not in self._cache:
+            self._cache[n] = self._compute_structural_edges(n)
+        return self._cache[n]
+    
+    def _compute_structural_edges(self, n: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Pre-compute all structural edges that don't depend on region layout."""
+        node_idx = np.arange(n * n, dtype=np.int64).reshape(n, n)
+        
+        # Row edges
+        row_edges = []
+        for r in range(n):
+            row_nodes = node_idx[r, :]
+            i, j = np.triu_indices(n, k=1)
+            row_edges.append(np.column_stack([row_nodes[i], row_nodes[j]]))
+        row_edges = np.vstack(row_edges)
+        
+        # Column edges
+        col_edges = []
+        for c in range(n):
+            col_nodes = node_idx[:, c]
+            i, j = np.triu_indices(n, k=1)
+            col_edges.append(np.column_stack([col_nodes[i], col_nodes[j]]))
+        col_edges = np.vstack(col_edges)
+        
+        # Diagonal edges
+        # Main diagonal (↘)
+        r, c = np.mgrid[0:n-1, 0:n-1]
+        diag1 = np.column_stack([
+            node_idx[r, c].ravel(),
+            node_idx[r + 1, c + 1].ravel()
+        ])
+        
+        # Anti-diagonal (↙)
+        r, c = np.mgrid[0:n-1, 1:n]
+        diag2 = np.column_stack([
+            node_idx[r, c].ravel(),
+            node_idx[r + 1, c - 1].ravel()
+        ])
+        
+        diag_edges = np.vstack([diag1, diag2])
+        
+        return row_edges, col_edges, diag_edges
+
+
+def _build_edge_index_optimized(region: np.ndarray, structural_cache: EdgeIndexCache) -> torch.Tensor:
+    """
+    Highly optimized edge index creation using vectorized operations.
+    
+    Returns undirected edge_index tensor capturing Queens constraints.
+    """
     n = region.shape[0]
-    idx = np.arange(n * n, dtype=np.int64).reshape(n, n)
-    edges: list[Tuple[int, int]] = []
+    
+    # Get pre-computed structural edges from provided cache
+    row_edges, col_edges, diag_edges = structural_cache.get_structural_edges(n)
+    
+    # Compute region edges (the only part that varies by board)
+    region_edges = _compute_region_edges_vectorized(region)
+    
+    # Stack all edges
+    all_edges = np.vstack([row_edges, col_edges, diag_edges, region_edges])
+    
+    # Add reverse edges for undirected graph
+    edges_undirected = np.vstack([all_edges, all_edges[:, [1, 0]]])
+    
+    return torch.tensor(edges_undirected.T, dtype=torch.long).contiguous()
 
-    # rows
-    for r in range(n):
-        for i, j in combinations(idx[r, :], 2):
-            edges += [(i, j), (j, i)]
 
-    # columns
-    for c in range(n):
-        for i, j in combinations(idx[:, c], 2):
-            edges += [(i, j), (j, i)]
+def _compute_region_edges_vectorized(region: np.ndarray) -> np.ndarray:
+    """
+    Compute region edges using fully vectorized operations.
+    
+    This is the only part that changes between boards, so we optimize it separately.
+    """
+    n = region.shape[0]
+    flat_region = region.ravel()
+    
+    # Use unique with return_inverse for efficient grouping
+    unique_regions, inverse = np.unique(flat_region, return_inverse=True)
+    
+    # Pre-allocate list for edge arrays
+    edge_arrays = []
+    
+    for region_id in range(len(unique_regions)):
+        # Get all cells in this region using boolean mask
+        region_mask = (inverse == region_id)
+        region_cells = np.where(region_mask)[0]
+        
+        n_cells = len(region_cells)
+        if n_cells > 1:
+            # Generate all pairs using triangular indices
+            i, j = np.triu_indices(n_cells, k=1)
+            edges = np.column_stack([region_cells[i], region_cells[j]])
+            edge_arrays.append(edges)
+    
+    # Combine all region edges
+    if edge_arrays:
+        return np.vstack(edge_arrays)
+    else:
+        return np.empty((0, 2), dtype=np.int64)
 
-    # regions
-    for reg in np.unique(region):
-        nodes = idx[region == reg].ravel()
-        for i, j in combinations(nodes, 2):
-            edges += [(i, j), (j, i)]
 
-    # immediate diagonals
-    for r in range(n - 1):
-        for c in range(n - 1):
-            a, b = idx[r, c], idx[r + 1, c + 1]  # ↘
-            edges += [(a, b), (b, a)]
-        for c in range(1, n):
-            a, b = idx[r, c], idx[r + 1, c - 1]  # ↙
-            edges += [(a, b), (b, a)]
+# def _build_edge_index(region: np.ndarray) -> torch.Tensor:
+#     """Return undirected edge_index tensor capturing Queens constraints."""
+#     n = region.shape[0]
+#     idx = np.arange(n * n, dtype=np.int64).reshape(n, n)
+#     edges: list[Tuple[int, int]] = []
 
-    return torch.tensor(edges, dtype=torch.long).t().contiguous()
+#     # rows
+#     for r in range(n):
+#         for i, j in combinations(idx[r, :], 2):
+#             edges += [(i, j), (j, i)]
+
+#     # columns
+#     for c in range(n):
+#         for i, j in combinations(idx[:, c], 2):
+#             edges += [(i, j), (j, i)]
+
+#     # regions
+#     for reg in np.unique(region):
+#         nodes = idx[region == reg].ravel()
+#         for i, j in combinations(nodes, 2):
+#             edges += [(i, j), (j, i)]
+
+#     # immediate diagonals
+#     for r in range(n - 1):
+#         for c in range(n - 1):
+#             a, b = idx[r, c], idx[r + 1, c + 1]  # ↘
+#             edges += [(a, b), (b, a)]
+#         for c in range(1, n):
+#             a, b = idx[r, c], idx[r + 1, c - 1]  # ↙
+#             edges += [(a, b), (b, a)]
+
+#     return torch.tensor(edges, dtype=torch.long).t().contiguous()
 
 
 #--------------------------------------------------------------
@@ -87,6 +197,7 @@ def _split_by_img(
 
     return train, val
 
+
 class QueensDataset(Dataset):
     """
     PyTorch Geometric Dataset for the Queens puzzle.
@@ -94,8 +205,9 @@ class QueensDataset(Dataset):
     - Row/col coordinates are min-max scaled to the [0 , 1] range.
     """
 
-    # cache of (train, val) splits so multiple Dataset instances reuse work
-    _cache: Dict[tuple[Path, float, int], Tuple[list[dict], list[dict]]] = {}
+    # Class-level caches shared across all instances
+    _split_cache: Dict[tuple[Path, float, int], Tuple[list[dict], list[dict]]] = {}
+    _structural_edge_cache = EdgeIndexCache()  # Shared structural edge cache
 
     def __init__(
         self,
@@ -117,18 +229,18 @@ class QueensDataset(Dataset):
         self.val_ratio   = val_ratio
         self.seed        = seed
         self.cache_edges = cache_edges
-        self._edge_cache: dict[int, torch.Tensor] = {}
+        self._board_edge_cache: dict[int, torch.Tensor] = {}  # Instance cache for complete edge indices
 
         # ------------------------------------------------------
         # 1) build / fetch cached train-val split
         # ------------------------------------------------------
         key = (self.json_path, val_ratio, seed)
-        if key not in self._cache:
+        if key not in self._split_cache:
             records          = json.loads(self.json_path.read_text())
             train, val       = _split_by_img(records, val_ratio, seed)
-            self._cache[key] = (train, val)
+            self._split_cache[key] = (train, val)
 
-        train_set, val_set = self._cache[key]
+        train_set, val_set = self._split_cache[key]
 
         # ------------------------------------------------------
         # 2) expose requested subset
@@ -181,12 +293,13 @@ class QueensDataset(Dataset):
 
         # --- edge_index (with optional cache) ----------------------------
         board_key = hash(region.tobytes()) if self.cache_edges else None
-        if board_key is not None and board_key in self._edge_cache:
-            edge_index = self._edge_cache[board_key]
+        if board_key is not None and board_key in self._board_edge_cache:
+            edge_index = self._board_edge_cache[board_key]
         else:
-            edge_index = _build_edge_index(region)
+            # Use the class-level structural cache
+            edge_index = _build_edge_index_optimized(region, self._structural_edge_cache)
             if board_key is not None:
-                self._edge_cache[board_key] = edge_index
+                self._board_edge_cache[board_key] = edge_index
 
         # --- assemble Data object ---------------------------------------
         return Data(
@@ -198,6 +311,7 @@ class QueensDataset(Dataset):
             meta=dict(source=e["source"], iteration=e["iteration"]),
         )
     
+
 def get_queens_loaders(
     json_path: str,
     *,
