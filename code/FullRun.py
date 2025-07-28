@@ -26,10 +26,8 @@ def set_seed(seed=42):
 def main_training():
     """Main training function with experiment tracking."""
     
-    # Set seed for reproducibility
     set_seed(42)
     
-    # Create configuration
     config = Config(**BASELINE_CONFIG)
     
     # Override specific settings if needed
@@ -38,7 +36,6 @@ def main_training():
     config.training.epochs = 30
     config.training.batch_size = 512
     
-    # Set experiment details
     config.experiment.experiment_name = "baseline_gat_v1"
     config.experiment.tags = ["baseline", "gat", "focal_loss"]
     config.experiment.notes = "Baseline GAT model with improved tracking and focal loss"
@@ -47,8 +44,8 @@ def main_training():
     print(f"Device: {config.system.device}")
     print(f"Experiment: {config.experiment.experiment_name}")
     
-    # Load data (train/val only - no test set loading during experiments)
-    print("\n📊 Loading datasets...")
+    # Load data (train/val only)
+    print("\n Loading datasets...")
     train_loader, val_loader = get_queens_loaders(
         config.data.train_json,
         batch_size=config.training.batch_size,
@@ -63,8 +60,7 @@ def main_training():
     print(f"Val samples: {len(val_loader.dataset):,}")
     print("Test set reserved for final evaluation only")
     
-    # Create model
-    print(f"\n🧠 Creating {config.model.model_type} model...")
+    print(f"\n Creating {config.model.model_type} model...")
     model = GAT(
         input_dim=config.model.input_dim,
         hidden_dim=config.model.hidden_dim,
@@ -78,8 +74,7 @@ def main_training():
     print(f"Total parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")
     
-    # Run training with tracking
-    print(f"\n🚀 Starting training for {config.training.epochs} epochs...")
+    print(f"\n Starting training for {config.training.epochs} epochs...")
     
     try:
         model, best_f1 = run_training_with_tracking(
@@ -89,16 +84,16 @@ def main_training():
             config=config
         )
         
-        print(f"\n✅ Training completed! Best validation F1: {best_f1:.4f}")
-        print("📝 Model checkpoints saved for future test evaluation")
+        print(f"\n Training completed! Best validation F1: {best_f1:.4f}")
+        print("Model checkpoints saved for future test evaluation")
         
         return model, best_f1
         
     except KeyboardInterrupt:
-        print("\n⚠️ Training interrupted by user")
+        print("\n Training interrupted by user")
         return None, 0.0
     except Exception as e:
-        print(f"\n❌ Training failed with error: {e}")
+        print(f"\n Training failed with error: {e}")
         raise
 
 def evaluate_test_set(model, test_loader, config):
@@ -109,8 +104,7 @@ def evaluate_test_set(model, test_loader, config):
     after all experimentation is complete. Using the test set during
     development can lead to overfitting to the test data.
     """
-    print("⚠️ WARNING: Evaluating on TEST SET")
-    print("   This should only be done with your final model!")
+    print("WARNING: Evaluating on TEST SET")
     
     device = config.system.device
     model.eval()
@@ -141,7 +135,6 @@ def evaluate_test_set(model, test_loader, config):
             FN += ((preds == 0) & (batch.y == 1)).sum().item()
             TN += ((preds == 0) & (batch.y == 0)).sum().item()
     
-    # Calculate metrics
     eps = 1e-9
     test_loss = total_loss / total_nodes
     test_acc = correct / total_nodes
@@ -162,7 +155,7 @@ def final_test_evaluation(model_checkpoint_path, config):
     Load best model and evaluate on test set.
     Only use this function when you're done with all experiments!
     """
-    print("🧪 FINAL TEST EVALUATION")
+    print("FINAL TEST EVALUATION")
     print("Loading test dataset...")
     
     test_dataset = QueensDataset(
@@ -181,7 +174,6 @@ def final_test_evaluation(model_checkpoint_path, config):
     
     print(f"Test samples: {len(test_dataset):,}")
     
-    # Load model
     print(f"Loading model from {model_checkpoint_path}")
     checkpoint = torch.load(model_checkpoint_path, map_location=config.system.device)
     
@@ -194,7 +186,6 @@ def final_test_evaluation(model_checkpoint_path, config):
     )
     model.load_state_dict(checkpoint['model_state_dict'])
     
-    # Evaluate
     test_metrics = evaluate_test_set(model, test_loader, config)
     
     print("\n🎯 FINAL TEST RESULTS:")
@@ -210,7 +201,6 @@ def run_hyperparameter_sweep():
     """Run hyperparameter optimization sweep."""
     print("🔍 Setting up hyperparameter sweep...")
     
-    # Create sweep
     sweep_id = create_wandb_sweep(
         config=EXAMPLE_SWEEP_CONFIG,
         project_name="queens-puzzle-ml"
@@ -219,13 +209,11 @@ def run_hyperparameter_sweep():
     def sweep_train():
         """Training function for sweep."""
         with wandb.init() as run:
-            # Get hyperparameters from wandb
             sweep_config = wandb.config
             
             # Create config with sweep parameters
             config = Config(**HYPEROPT_CONFIG)
             
-            # Update with sweep parameters
             if hasattr(sweep_config, 'learning_rate'):
                 config.training.learning_rate = sweep_config.learning_rate
             if hasattr(sweep_config, 'hidden_dim'):
@@ -235,10 +223,8 @@ def run_hyperparameter_sweep():
             if hasattr(sweep_config, 'focal_gamma'):
                 config.training.focal_gamma = sweep_config.focal_gamma
             
-            # Set experiment name
             config.experiment.experiment_name = f"sweep_{run.id}"
             
-            # Load data (train/val only)
             train_loader, val_loader = get_queens_loaders(
                 config.data.train_json,
                 batch_size=config.training.batch_size,
@@ -247,7 +233,6 @@ def run_hyperparameter_sweep():
                 num_workers=2,  # Reduce for sweep
             )
             
-            # Create model
             model = GAT(
                 input_dim=config.model.input_dim,
                 hidden_dim=config.model.hidden_dim,
@@ -256,7 +241,6 @@ def run_hyperparameter_sweep():
                 heads=config.model.heads
             )
             
-            # Run training
             try:
                 _, best_f1 = run_training_with_tracking(
                     model=model,
@@ -277,7 +261,7 @@ def run_hyperparameter_sweep():
 
 def quick_test():
     """Quick test run for debugging."""
-    print("🧪 Running quick test...")
+    print("Running quick test...")
     
     config = Config()
     config.training.epochs = 2
@@ -285,7 +269,6 @@ def quick_test():
     config.experiment.experiment_name = "quick_test"
     config.experiment.tags = ["test", "debug"]
     
-    # Load small subset of data (train/val only)
     train_loader, val_loader = get_queens_loaders(
         config.data.train_json,
         batch_size=config.training.batch_size,
@@ -293,7 +276,6 @@ def quick_test():
         num_workers=2,
     )
     
-    # Small model
     config.model.hidden_dim = 128
     config.model.layer_count = 2
     
@@ -312,13 +294,13 @@ def quick_test():
             val_loader=val_loader,
             config=config
         )
-        print(f"✅ Quick test completed! Best validation F1: {best_f1:.4f}")
+        print(f"Quick test completed! Best validation F1: {best_f1:.4f}")
         return True
     except Exception as e:
-        print(f"❌ Quick test failed: {e}")
+        print(f"Quick test failed: {e}")
         return False
 
-# Colab-friendly functions - call these directly in notebook cells
+# Helper functions
 def run_baseline_experiment():
     """Run the baseline experiment - call this in a Colab cell."""
     return main_training()
@@ -338,33 +320,3 @@ def load_and_test_final_model(checkpoint_path="checkpoints/best_model.pt"):
     """
     config = Config(**BASELINE_CONFIG)
     return final_test_evaluation(checkpoint_path, config)
-
-# Helper function for Colab users
-def print_usage_guide():
-    """Print usage instructions for Colab."""
-    print("📖 COLAB USAGE GUIDE")
-    print("=" * 50)
-    print()
-    print("🔥 Quick Start:")
-    print("   model, best_f1 = run_baseline_experiment()")
-    print()
-    print("🧪 Quick Debug (2 epochs):")
-    print("   success = run_quick_debug()")
-    print()
-    print("🔍 Hyperparameter Sweep:")
-    print("   sweep_id, sweep_fn = setup_hyperparameter_sweep()")
-    print("   # Then run: !wandb agent {sweep_id}")
-    print()
-    print("🎯 Final Test (ONLY when done with ALL experiments):")
-    print("   test_results = load_and_test_final_model()")
-    print()
-    print("📊 Customize experiment:")
-    print("   config = Config(**BASELINE_CONFIG)")
-    print("   config.training.epochs = 50")
-    print("   config.experiment.experiment_name = 'my_experiment'")
-    print("   # Then use config in run_training_with_tracking()")
-    print()
-    print("💡 Remember: Test set is reserved for final evaluation only!")
-
-# Display the guide when imported
-print_usage_guide()

@@ -26,7 +26,7 @@ class TrainingConfig:
     focal_gamma: float = 2.0
     
     # Scheduler
-    scheduler_type: str = "cosine"  # "cosine", "step", "plateau"
+    scheduler_type: str = "plateau"  # "cosine", "step", "plateau"
     cosine_t_max: int = 100
     cosine_eta_min: float = 1e-6
 
@@ -45,11 +45,10 @@ class ExperimentConfig:
     """Experiment tracking and logging configuration."""
     project_name: str = "queens-puzzle-ml"
     experiment_name: Optional[str] = 'test'
-    entity: Optional[str] = None  # Add W&B entity field
     tags: list = 'test'
     notes: str = ""
     
-    # Logging frequencies (removed batch-level settings)
+    # Logging frequencies
     log_gradients_every_n_epochs: int = 1
     log_predictions_every_n_epochs: int = 2
     save_model_every_n_epochs: int = 10
@@ -63,7 +62,7 @@ class SystemConfig:
     """System and performance configuration."""
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     mixed_precision: bool = True
-    compile_model: bool = False  # PyTorch 2.0 compilation
+    compile_model: bool = False
     profile_memory: bool = False
 
 class Config:
@@ -122,6 +121,6 @@ HYPEROPT_CONFIG = {
         "notes": "Systematic hyperparameter optimization"
     },
     "training": {
-        "epochs": 15  # Shorter runs for sweeps
+        "epochs": 15
     }
 }
