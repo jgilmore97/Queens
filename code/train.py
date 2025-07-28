@@ -7,18 +7,17 @@ from collections import Counter
 from tqdm.auto import tqdm
 import numpy as np
 
-# Import our FIXED tracking
+# Import our FIXED tracking - note the new import name
 from experiment_tracker_fixed import ExperimentTracker
 from config import Config
 
-def train_epoch(model, loader, criterion, optimizer, device, tracker, epoch):
-    """Train for one epoch with simplified logging."""
+def train_epoch(model, loader, criterion, optimizer, device, epoch):
+    """Train for one epoch - clean and efficient."""
     model.train()
     total_loss, total_nodes = 0.0, 0
     correct, TP, FP, FN, TN = 0, 0, 0, 0, 0
     
     batch_losses = []
-    grad_norms = []
     
     pbar = tqdm(loader, desc=f"Train Epoch {epoch}", leave=False)
     
@@ -32,11 +31,6 @@ def train_epoch(model, loader, criterion, optimizer, device, tracker, epoch):
         
         # Backward pass
         loss.backward()
-        
-        # Calculate gradient norm
-        grad_norm = torch.sqrt(sum(p.grad.norm(2)**2 for p in model.parameters() if p.grad is not None))
-        grad_norms.append(grad_norm.item())
-        
         optimizer.step()
 
         # Metrics calculation
@@ -58,16 +52,14 @@ def train_epoch(model, loader, criterion, optimizer, device, tracker, epoch):
         
         batch_losses.append(loss.item())
         
-        # Update progress bar
+        # Update progress bar (visual feedback only)
         current_loss = total_loss / total_nodes
         current_acc = correct / total_nodes
         pbar.set_postfix({
             'loss': f'{current_loss:.4f}',
-            'acc': f'{current_acc:.3f}',
-            'grad': f'{grad_norm.item():.3f}'
+            'acc': f'{current_acc:.3f}'
         })
         
-        # No more batch-level logging to W&B
     
     # Calculate epoch metrics
     eps = 1e-9
@@ -76,7 +68,6 @@ def train_epoch(model, loader, criterion, optimizer, device, tracker, epoch):
     precision = TP / (TP + FP + eps)
     recall = TP / (TP + FN + eps)
     f1 = 2 * precision * recall / (precision + recall + eps)
-    avg_grad_norm = np.mean(grad_norms)
     
     metrics = {
         'loss': avg_loss,
@@ -84,7 +75,6 @@ def train_epoch(model, loader, criterion, optimizer, device, tracker, epoch):
         'precision': precision,
         'recall': recall,
         'f1': f1,
-        'gradient_norm': avg_grad_norm,
         'loss_std': np.std(batch_losses)
     }
     
@@ -133,7 +123,7 @@ def evaluate_epoch(model, loader, criterion, device, epoch):
         FN += batch_FN
         TN += batch_TN
         
-        # Update progress bar
+        # Update progress bar (this is just visual feedback, not W&B logging)
         current_loss = total_loss / total_nodes
         current_acc = correct / total_nodes
         pbar.set_postfix({
@@ -188,7 +178,7 @@ def create_scheduler(optimizer, config):
         raise ValueError(f"Unknown scheduler type: {config.training.scheduler_type}")
 
 def run_training_with_tracking(model, train_loader, val_loader, config, resume_id=None):
-    """Main training loop with FIXED experiment tracking."""
+    """Main training loop with FIXED consolidated experiment tracking."""
     
     # Initialize FIXED experiment tracker
     tracker = ExperimentTracker(config, resume_id=resume_id)
@@ -226,9 +216,8 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
             if epoch_start_time:
                 epoch_start_time.record()
             
-            # Training
-            train_metrics = train_epoch(model, train_loader, criterion, optimizer, 
-                                      device, tracker, epoch)
+            # Training (removed tracker parameter)
+            train_metrics = train_epoch(model, train_loader, criterion, optimizer, device, epoch)
             
             # Validation
             val_metrics = evaluate_epoch(model, val_loader, criterion, device, epoch)
@@ -249,14 +238,15 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
                 epoch_time = epoch_start_time.elapsed_time(epoch_end_time) / 1000.0  # seconds
                 train_metrics['epoch_time_seconds'] = epoch_time
             
-            # Log all metrics
-            tracker.log_model_performance(train_metrics, val_metrics, epoch)
-            
-            # Log gradients periodically
-            tracker.log_gradients(model, epoch)
-            
-            # Log sample predictions
-            tracker.log_predictions(model, val_loader, epoch, device)
+            # CONSOLIDATED LOGGING - Single call with all metrics
+            tracker.log_epoch_metrics(
+                train_metrics=train_metrics,
+                val_metrics=val_metrics,
+                epoch=epoch,
+                model=model,  # For gradient logging
+                val_loader=val_loader,  # For prediction logging
+                device=device
+            )
             
             # Check for best model
             is_best = val_metrics['f1'] > best_val_f1
@@ -282,7 +272,6 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
         # Always clean up tracker
         tracker.finish()
 
-# Keep your existing classes
 class FocalLoss(nn.Module):
     """Binary focal loss for logits."""
     def __init__(self, alpha: float = 0.25, gamma: float = 2.0, reduction: str = "mean"):
@@ -306,66 +295,3 @@ class FocalLoss(nn.Module):
             return loss.sum()
         else:                          
             return loss
-
-# Legacy functions for backward compatibility
-def train(model, loader, criterion, optimizer, device):
-    """Legacy training function - use train_epoch instead."""
-    model.train()
-    total_loss, total_nodes = 0.0, 0
-    for batch in loader:
-        batch = batch.to(device)
-        optimizer.zero_grad()
-        logits = model(batch.x, batch.edge_index)
-        loss = criterion(logits, batch.y.float())
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item() * batch.num_nodes
-        total_nodes += batch.num_nodes
-    return total_loss / total_nodes
-
-@torch.no_grad()
-def evaluate(model, loader, criterion, device):
-    """Legacy evaluation function - use evaluate_epoch instead."""
-    model.eval()
-    total_loss, correct, total_nodes = 0.0, 0, 0
-    for batch in loader:
-        batch = batch.to(device)
-        logits = model(batch.x, batch.edge_index)
-        loss = criterion(logits, batch.y.float())
-        total_loss += loss.item() * batch.num_nodes
-        preds = (logits > 0).long()
-        correct += (preds == batch.y).sum().item()
-        total_nodes += batch.num_nodes
-    return total_loss / total_nodes, correct / total_nodes
-
-def run_training(model, train_loader, val_loader, epochs=50, lr=1e-3, weight_decay=1e-5, device="cuda"):
-    """Legacy training function - use run_training_with_tracking instead."""
-    print("Warning: Using legacy training function. Consider upgrading to run_training_with_tracking.")
-    
-    model = model.to(device)
-    counter = Counter()
-    for batch in train_loader:
-        counter.update(batch.y.cpu().tolist())
-    num_pos, num_neg = counter[1], counter[0]
-    pos_weight = torch.tensor([num_neg / num_pos], device=device)
-
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
-
-    best_val_acc = 0.0
-    for epoch in range(1, epochs + 1):
-        train_loss = train(model, train_loader, criterion, optimizer, device)
-        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
-        scheduler.step()
-        current_lr = scheduler.get_last_lr()[0]
-
-        print(f"Epoch {epoch:02d} | Train Loss: {train_loss:.4f} | "
-              f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc*100:5.2f}% | LR: {current_lr:.1e}")
-
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            torch.save(model.state_dict(), "best_model.pt")
-
-    print(f"\nTraining complete. Best Val Acc: {best_val_acc*100:.2f}%")
-    return model

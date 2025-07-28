@@ -50,7 +50,7 @@ class ExperimentConfig:
     notes: str = ""
     
     # Logging frequencies (removed batch-level settings)
-    log_gradients_every_n_epochs: int = 5
+    log_gradients_every_n_epochs: int = 1
     log_predictions_every_n_epochs: int = 2
     save_model_every_n_epochs: int = 10
     

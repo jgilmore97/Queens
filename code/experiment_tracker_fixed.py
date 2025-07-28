@@ -1,6 +1,6 @@
 """
-Simplified experiment tracking with W&B - no artifacts, no bucket uploads.
-Memory-efficient logging with basic functionality only.
+Fixed experiment tracking with W&B - consolidated epoch-level logging only.
+No more step conflicts or batch-level tracking.
 """
 
 import os
@@ -15,56 +15,15 @@ import torch
 import numpy as np
 import wandb
 
-class MemoryEfficientLogger:
-    """Memory-conscious logging with buffering and sampling."""
-    
-    def __init__(self, config):
-        self.config = config.experiment
-        self.buffer_size = 100
-        self.metric_buffer = defaultdict(deque)
-        
-    def add_scalar(self, key: str, value: float, step: Optional[int] = None):
-        """Add scalar metric to buffer."""
-        self.metric_buffer[key].append((value, step, time.time()))
-        
-        # Prevent buffer overflow
-        if len(self.metric_buffer[key]) > self.buffer_size:
-            self.metric_buffer[key].popleft()
-    
-    def flush(self, step: int):
-        """Flush buffered metrics to wandb."""
-        if not self.metric_buffer:
-            return
-            
-        # Aggregate buffered metrics
-        log_dict = {}
-        for key, values in self.metric_buffer.items():
-            if values:
-                recent_values = [v[0] for v in values]
-                log_dict[key] = np.mean(recent_values)
-        
-        if log_dict:
-            wandb.log(log_dict, step=step)
-        
-        # Clear buffers
-        self.metric_buffer.clear()
-
-"""
-Simplified experiment tracking with single step counter for epoch-level logging only.
-"""
-
 class ExperimentTracker:
     """
-    Simplified experiment tracking with single step counter for epoch-level metrics only.
-    No more batch-level logging to avoid W&B step conflicts.
+    Fixed experiment tracking with consolidated epoch-level logging only.
+    Uses epoch number as the W&B step to avoid step conflicts.
     """
     
     def __init__(self, config, resume_id: Optional[str] = None):
         self.config = config
         self.start_time = time.time()
-        
-        # Single step counter for all logging
-        self.step = 0
         
         # Initialize wandb
         self._init_wandb(resume_id)
@@ -73,12 +32,17 @@ class ExperimentTracker:
         self.process = psutil.Process()
         self.peak_memory = 0
         
+        # Current learning rate tracking
+        self._current_lr = config.training.learning_rate
+        
         # Create directories
         Path(config.experiment.checkpoint_dir).mkdir(exist_ok=True)
         Path(config.experiment.log_dir).mkdir(exist_ok=True)
+        
+        print("✅ Experiment tracker initialized with consolidated logging")
     
     def _init_wandb(self, resume_id: Optional[str]):
-        """Initialize W&B with simple step metric."""
+        """Initialize W&B with simple config."""
         # Simple config dict
         simple_config = {
             "model_type": self.config.model.model_type,
@@ -114,11 +78,11 @@ class ExperimentTracker:
         
         wandb.init(**init_args)
         
-        # Log basic system info
+        # Log system info once at the beginning (step 0)
         self._log_system_info()
     
     def _log_system_info(self):
-        """Log basic system information."""
+        """Log basic system information at step 0."""
         system_metrics = {
             "system/device": str(self.config.system.device),
             "system/cuda_available": torch.cuda.is_available(),
@@ -135,24 +99,29 @@ class ExperimentTracker:
             except:
                 pass
         
-        wandb.log(system_metrics, step=self.step)
-        self.step += 1
+        # Log system info at step 0
+        wandb.log(system_metrics, step=0)
     
-    def log_model_performance(self, train_metrics: Dict, val_metrics: Dict, epoch: int):
-        """Log epoch-level metrics with single step counter."""
+    def log_epoch_metrics(self, train_metrics: Dict, val_metrics: Dict, epoch: int, 
+                         model: Optional[torch.nn.Module] = None, val_loader=None, device: str = None):
+        """
+        Consolidated logging for all epoch-level metrics.
+        Uses epoch number as W&B step to avoid conflicts.
+        """
+        # Start building the consolidated metrics dict
         all_metrics = {}
         
-        # Add prefixes
+        # Add train/val metrics with prefixes
         for k, v in train_metrics.items():
             all_metrics[f"train/{k}"] = v
         for k, v in val_metrics.items():
             all_metrics[f"val/{k}"] = v
         
-        # Add metadata
+        # Add epoch metadata
         all_metrics["epoch"] = epoch
-        all_metrics["learning_rate"] = self._get_current_lr()
+        all_metrics["learning_rate"] = self._current_lr
         
-        # System metrics
+        # Add system metrics
         memory_mb = self.process.memory_info().rss / (1024 * 1024)
         self.peak_memory = max(self.peak_memory, memory_mb)
         all_metrics["system/memory_mb"] = memory_mb
@@ -165,39 +134,122 @@ class ExperimentTracker:
             except:
                 pass
         
-        # Log everything with single step counter
-        wandb.log(all_metrics, step=self.step)
-        self.step += 1
+        # Add gradient metrics if model provided and it's time to log them
+        if (model is not None and 
+            epoch % self.config.experiment.log_gradients_every_n_epochs == 0):
+            grad_metrics = self._compute_gradient_metrics(model)
+            all_metrics.update(grad_metrics)
+        
+        # Add prediction metrics if val_loader provided and it's time to log them
+        if (model is not None and val_loader is not None and device is not None and
+            epoch % self.config.experiment.log_predictions_every_n_epochs == 0):
+            pred_metrics = self._compute_prediction_metrics(model, val_loader, device)
+            all_metrics.update(pred_metrics)
+        
+        # Single consolidated log call using epoch as step
+        wandb.log(all_metrics, step=epoch)
     
-    def log_gradients(self, model: torch.nn.Module, epoch: int):
-        """Log gradient statistics."""
-        if epoch % self.config.experiment.log_gradients_every_n_epochs != 0:
-            return
-            
+    def _compute_gradient_metrics(self, model: torch.nn.Module) -> Dict[str, float]:
+        """
+        Compute proper vanishing gradient analysis.
+        Tracks layer-wise gradients, ratios, and gradient flow.
+        """
         grad_stats = {}
-        total_norm = 0
-        param_count = 0
+        
+        # Collect layer-wise gradient norms
+        layer_grads = {}
+        layer_names = []
         
         for name, param in model.named_parameters():
-            if param.grad is not None:
+            if param.grad is not None and param.requires_grad:
                 grad_norm = param.grad.norm().item()
-                total_norm += grad_norm ** 2
-                param_count += param.numel()
+                param_norm = param.norm().item()
                 
-                if any(layer_type in name for layer_type in ['conv', 'linear', 'attention']):
-                    grad_stats[f"gradients/{name}_norm"] = grad_norm
+                # Extract layer identifier (e.g., "conv1", "convs.0", "linear")
+                layer_name = self._extract_layer_name(name)
+                
+                if layer_name not in layer_grads:
+                    layer_grads[layer_name] = {
+                        'grad_norm': 0.0,
+                        'param_norm': 0.0,
+                        'param_count': 0
+                    }
+                
+                # Accumulate for this layer
+                layer_grads[layer_name]['grad_norm'] += grad_norm ** 2
+                layer_grads[layer_name]['param_norm'] += param_norm ** 2
+                layer_grads[layer_name]['param_count'] += param.numel()
+                
+                layer_names.append(layer_name)
         
-        grad_stats["gradients/total_norm"] = total_norm ** 0.5
-        grad_stats["gradients/param_count"] = param_count
+        # Calculate layer-wise statistics
+        layer_grad_norms = []
+        layer_update_ratios = []
         
-        wandb.log(grad_stats, step=self.step)
-        self.step += 1
+        for layer_name, stats in layer_grads.items():
+            # Final L2 norm for this layer
+            layer_grad_norm = (stats['grad_norm'] ** 0.5)
+            layer_param_norm = (stats['param_norm'] ** 0.5)
+            
+            # Update ratio: how much this layer will change relative to its current values
+            update_ratio = layer_grad_norm / (layer_param_norm + 1e-8)
+            
+            # Store individual layer metrics
+            grad_stats[f"gradients/layer_{layer_name}_norm"] = layer_grad_norm
+            grad_stats[f"gradients/layer_{layer_name}_update_ratio"] = update_ratio
+            grad_stats[f"gradients/layer_{layer_name}_param_count"] = stats['param_count']
+            
+            layer_grad_norms.append(layer_grad_norm)
+            layer_update_ratios.append(update_ratio)
+        
+        if len(layer_grad_norms) >= 2:
+            # Gradient flow analysis
+            first_layer_grad = layer_grad_norms[0]
+            last_layer_grad = layer_grad_norms[-1]
+            
+            # Vanishing gradient indicators
+            grad_stats["gradients/first_last_ratio"] = first_layer_grad / (last_layer_grad + 1e-8)
+            grad_stats["gradients/first_layer_norm"] = first_layer_grad
+            grad_stats["gradients/last_layer_norm"] = last_layer_grad
+            
+            # Gradient variance across layers (higher = more uneven flow)
+            grad_stats["gradients/layer_variance"] = np.var(layer_grad_norms)
+            grad_stats["gradients/min_layer_norm"] = min(layer_grad_norms)
+            grad_stats["gradients/max_layer_norm"] = max(layer_grad_norms)
+            
+            # Update ratio analysis
+            grad_stats["gradients/min_update_ratio"] = min(layer_update_ratios)
+            grad_stats["gradients/max_update_ratio"] = max(layer_update_ratios)
+            grad_stats["gradients/avg_update_ratio"] = np.mean(layer_update_ratios)
+            
+            # Vanishing gradient warning flags
+            grad_stats["gradients/vanishing_warning"] = int(first_layer_grad < 1e-5)
+            grad_stats["gradients/exploding_warning"] = int(max(layer_grad_norms) > 10.0)
+        
+        # Overall statistics
+        grad_stats["gradients/total_layers"] = len(layer_grads)
+        grad_stats["gradients/global_norm"] = (sum(layer_grad_norms) ** 2) ** 0.5
+        
+        return grad_stats
     
-    def log_predictions(self, model: torch.nn.Module, val_loader, epoch: int, device: str):
-        """Log sample predictions."""
-        if epoch % self.config.experiment.log_predictions_every_n_epochs != 0:
-            return
+    def _extract_layer_name(self, param_name: str) -> str:
+        """
+        Extract meaningful layer name from parameter name.
+        Examples:
+            'conv1.weight' -> 'conv1'
+            'convs.0.weight' -> 'convs_0'
+            'linear.bias' -> 'linear'
+        """
+        # Remove .weight, .bias suffixes
+        name = param_name.replace('.weight', '').replace('.bias', '')
         
+        # Handle module lists (convs.0 -> convs_0)
+        name = name.replace('.', '_')
+        
+        return name
+    
+    def _compute_prediction_metrics(self, model: torch.nn.Module, val_loader, device: str) -> Dict[str, float]:
+        """Compute prediction statistics and return as dict."""
         model.eval()
         predictions_logged = 0
         max_predictions = 5
@@ -226,11 +278,8 @@ class ExperimentTracker:
                 
                 predictions_logged += 1
         
-        if pred_metrics:
-            wandb.log(pred_metrics, step=self.step)
-            self.step += 1
-        
         model.train()
+        return pred_metrics
     
     def save_checkpoint(self, model: torch.nn.Module, optimizer, epoch: int, 
                        metrics: Dict[str, float], is_best: bool = False):
@@ -260,16 +309,11 @@ class ExperimentTracker:
             torch.save(checkpoint, best_path)
             print(f"🏆 Best model saved: {best_path}")
             
-            # Log that we saved the best model
+            # Log that we saved the best model (will be included in next epoch log)
             wandb.log({
                 "best_model/epoch": epoch, 
                 "best_model/saved": 1,
-            }, step=self.step)
-            self.step += 1
-    
-    def _get_current_lr(self) -> float:
-        """Get current learning rate."""
-        return getattr(self, '_current_lr', 0.0)
+            }, step=epoch)
     
     def set_current_lr(self, lr: float):
         """Set current learning rate for logging."""
@@ -281,14 +325,28 @@ class ExperimentTracker:
         final_metrics = {
             "experiment/total_time_minutes": total_time / 60,
             "experiment/peak_memory_mb": self.peak_memory,
-            "experiment/total_steps": self.step,
         }
         
-        wandb.log(final_metrics, step=self.step)
+        # Use a high step number for final metrics to avoid conflicts
+        wandb.log(final_metrics, step=9999)
         wandb.finish()
         print("🏁 Experiment tracking finished")
 
-# Example sweep configuration
+def create_wandb_sweep(config: Dict[str, Any], project_name: str) -> str:
+    """Create a wandb hyperparameter sweep."""
+    sweep_config = {
+        'method': 'bayes',
+        'metric': {
+            'name': 'val/f1',
+            'goal': 'maximize'
+        },
+        'parameters': config
+    }
+    
+    sweep_id = wandb.sweep(sweep_config, project=project_name)
+    return sweep_id
+
+
 EXAMPLE_SWEEP_CONFIG = {
     'learning_rate': {
         'distribution': 'log_uniform_values',
