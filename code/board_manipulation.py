@@ -12,13 +12,13 @@ import copy
 from copy import deepcopy
 
 import matplotlib.pyplot as plt
-from matplotlib import colors
+import matplotlib.colors as colors
 
 import os
 import time
 from tqdm import tqdm
 
-# function to detect grid size by counting transitions from non-black to black pixels along a line of pixels (counts black lines to detect grid size)
+# Function to detect grid size by counting transitions from non-black to black pixels along a line of pixels (counts black lines to detect grid size)
 def detect_grid_size_by_black_lines(
     image_path, axis='horizontal', row_or_col=100, black_threshold=50, visualize=False
 ):
@@ -70,7 +70,7 @@ def detect_grid_size_by_black_lines(
     return transitions + 1
 
 
-#function to turn a jpg image of queens board into a tensor of RGB values
+# Function to turn a jpg image of queens board into a tensor of RGB values
 def extract_rgb_tensor(image_path, row_scan=5, col_scan=5, center_ratio=0.4):
     image = Image.open(image_path).convert("RGB")
     img_np = np.array(image)
@@ -103,7 +103,7 @@ def extract_rgb_tensor(image_path, row_scan=5, col_scan=5, center_ratio=0.4):
 
     return rgb_tensor
 
-# combine with extract_rgb_tensor to create a function that turns the RGB tensor into integer labels ->every color in the RGB tensor is assigned a unique integer label
+# Combine with extract_rgb_tensor to create a function that turns the RGB tensor into integer labels ->every color in the RGB tensor is assigned a unique integer label
 def quantize_rgb_tensor(rgb_tensor, threshold=30):
     """
     Converts RGB tensor to integer-labeled tensor using per-image color clustering.
@@ -136,14 +136,14 @@ def quantize_rgb_tensor(rgb_tensor, threshold=30):
 
     return int_tensor
 
-# combine above 2 functions into one to fully
+# Combine above 2 functions into one to fully extract the region tensor from a jpg image
 def extract(filepath, threshold=30):
     board_rgb = extract_rgb_tensor(filepath)
     region_tensor = quantize_rgb_tensor(board_rgb, threshold=threshold)
     return region_tensor
 
 
-# uses traditional backtracking to solve the queens puzzle. Using to get label data.
+# Uses traditional backtracking to solve the queens puzzle. Using to get label data.
 def solve_queens(region):
     """
     Solve the 'queens' puzzle on a square grid whose regions are encoded
@@ -344,7 +344,6 @@ def generate_unique_mutated_board(original_board,
     n = original_board.shape[0]
     total_cells = n * n
     target_percent = random.uniform(min_percent, max_percent)
-    # print(target_percent)
     target_changed_cells = int(total_cells * target_percent)
 
     for attempt in range(max_attempts):
@@ -473,103 +472,6 @@ def expand_board_dataset(seed_dataset, target_size=5000):
 
     return generated_dataset, offspring_counter
 
-# def expand_board_dataset(seed_dataset, target_size=5000):
-#     """
-#     Expands a seed dataset of region boards to the target size using mutation and validation.
-    
-#     Parameters:
-#     - seed_dataset: list of dicts, each with at least a 'region' and 'filename' field
-#     - target_size: total number of generated boards desired
-    
-#     Returns:
-#     - generated_dataset: list of valid, unique, mutated board dicts
-#     """
-#     generated_dataset = []
-#     available_pool = deque(seed_dataset.copy())
-#     seen_hashes = set(hash_board(entry['region']) for entry in seed_dataset)
-
-#     round_count = 0
-
-#     while len(generated_dataset) < target_size and available_pool:
-#         round_count += 1
-#         print(f"\n=== Round {round_count} ===")
-#         print(f"Generated so far: {len(generated_dataset)}")
-#         print(f"Attempting {len(available_pool)} mutations...")
-
-#         successes = 0
-#         next_pool = deque()
-
-#         for entry in tqdm(list(available_pool), desc=f"Mutating (Round {round_count})"):
-#             base_region = entry["region"]
-
-#             try:
-#                 new_region = generate_unique_mutated_board(base_region)
-#                 if new_region is None:
-#                     next_pool.append(entry)
-#                     continue
-
-#                 region_hash = hash_board(new_region)
-#                 if region_hash in seen_hashes:
-#                     continue
-
-#                 positions, solution_board = solve_queens(new_region)
-
-#                 new_board = {
-#                     "region": new_region,
-#                     "queen_positions": positions,
-#                     "solution_board": solution_board,
-#                     "source": entry.get("filename", "unknown"),
-#                 }
-
-#                 generated_dataset.append(new_board)
-#                 next_pool.append(new_board)
-#                 seen_hashes.add(region_hash)
-#                 successes += 1
-
-#             except Exception as e:
-#                 print(f"⚠️ Error mutating {entry.get('filename', 'unknown')}: {e}")
-#                 continue
-
-#         print(f"Round {round_count} complete: {successes} new boards.")
-#         if successes == 0:
-#             print("No successful mutations this round — stopping early.")
-#             break
-
-#         available_pool = next_pool
-
-#     print(f"\n Finished: {len(generated_dataset)} boards generated.")
-#     return generated_dataset
-
-
-# def generate_unique_mutated_board(original_board, target_mutations=6,
-#                                    max_solution_count=1, max_attempts=30,
-#                                    max_mutation_tries=100):
-#     """
-#     Tries to create a sufficiently mutated board with 1 to `max_solution_count` solutions.
-
-#     Returns:
-#     - A new board or None if no valid board was found.
-#     """
-#     for attempt in range(max_attempts):
-#         board = original_board.copy()
-#         successful_mutations = 0
-#         total_mutation_attempts = 0
-
-#         while successful_mutations < target_mutations and total_mutation_attempts < max_mutation_tries:
-#             new_board = mutate_region_frontier(board)
-#             if not np.array_equal(new_board, board):
-#                 board = new_board
-#                 successful_mutations += 1
-#             total_mutation_attempts += 1
-
-#         # must have at least 1 and at most max_solution_count solutions
-#         solutions = count_solutions(board, max_solutions=max_solution_count + 1)
-#         if 1 <= solutions <= max_solution_count:
-#             return board
-
-#     return None
-# ---------------------------------------------------------------------------------------------------------------------------------------------
-
 # take a board tensor and visualize it as a colored grid -> recreating the starting viz
 def visualize_queens_board(board: np.ndarray, title: str = "Colored Queens Board") -> None:
     """
@@ -683,7 +585,7 @@ def generate_training_states(board_data):
     training_examples = []
     current_input = [[0]*board_size for _ in range(board_size)]
 
-    # ✅ Step 0: No queens placed yet
+    # Step 0: No queens placed yet
     label_output = [[0]*board_size for _ in range(board_size)]
     for r, c in rotated_queens:
         label_output[r][c] = 1
@@ -731,15 +633,10 @@ def save_state_dataset_to_json(dataset, filename="queens_training_data.json"):
         json.dump(dataset, f, indent=2)
     print(f"Saved {len(dataset)} examples to {filename}")
 
-
 # Example usage:
 # save_dataset_to_json(all_training_data, "augmented_queens_data.json")
 
 # Below function visualizes a single training example with queens overlaid on the board.
-import matplotlib.pyplot as plt
-import matplotlib.colors as colors
-import numpy as np
-
 def visualize_queens_board_with_queens(example: dict, title: str = "Queens Board with Queens") -> None:
     """
     Visualize a single training example from the dataset with queens overlaid.
@@ -775,8 +672,3 @@ def visualize_queens_board_with_queens(example: dict, title: str = "Queens Board
     ax.tick_params(which='both', bottom=False, left=False, labelbottom=False, labelleft=False)
     ax.set_title(title)
     plt.show()
-
-
-# Example usage:
-# visualize_queens_board_with_queens(all_training_data[0], title="Step 1 Example")
-

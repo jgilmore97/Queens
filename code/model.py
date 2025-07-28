@@ -47,7 +47,7 @@ class GAT(nn.Module):
             in_channels=input_dim,
             out_channels=head_dim,
             heads=heads,
-            concat=True,            # default; dims multiply by heads
+            concat=True,
             dropout=dropout,
             add_self_loops=True,
         )
@@ -66,15 +66,15 @@ class GAT(nn.Module):
 
         self.relu    = nn.LeakyReLU(0.2)
         self.dropout = nn.Dropout(dropout)
-        self.linear  = nn.Linear(hidden_dim, 1)   # single logit per node
+        self.linear  = nn.Linear(hidden_dim, 1)
 
     def forward(self, x, edge_index):
         x = self.relu(self.conv1(x, edge_index))
         x = self.dropout(x)
 
         for conv in self.convs:
-            x = self.relu(x + conv(x, edge_index))   # residual skip
+            x = self.relu(x + conv(x, edge_index))
             x = self.dropout(x)
 
-        logits = self.linear(x).squeeze(-1)          # shape [N]
+        logits = self.linear(x).squeeze(-1)
         return logits

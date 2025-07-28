@@ -7,7 +7,6 @@ from collections import Counter
 from tqdm.auto import tqdm
 import numpy as np
 
-# Import our FIXED tracking - note the new import name
 from experiment_tracker_fixed import ExperimentTracker
 from config import Config
 
@@ -25,7 +24,7 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch):
         batch = batch.to(device)
         optimizer.zero_grad()
 
-        # Forward pass
+        # Forward pass -- Focal BCE by cell
         logits = model(batch.x, batch.edge_index)
         loss = criterion(logits, batch.y.float())
         
@@ -52,7 +51,6 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch):
         
         batch_losses.append(loss.item())
         
-        # Update progress bar (visual feedback only)
         current_loss = total_loss / total_nodes
         current_acc = correct / total_nodes
         pbar.set_postfix({
@@ -61,7 +59,6 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch):
         })
         
     
-    # Calculate epoch metrics
     eps = 1e-9
     avg_loss = total_loss / total_nodes
     accuracy = correct / total_nodes
@@ -103,12 +100,10 @@ def evaluate_epoch(model, loader, criterion, device, epoch):
         probs = torch.sigmoid(logits)
         preds = (logits > 0).long()
         
-        # Store predictions for detailed analysis
         all_probs.extend(probs.cpu().numpy())
         all_preds.extend(preds.cpu().numpy())
         all_labels.extend(batch.y.cpu().numpy())
         
-        # Metrics
         batch_correct = (preds == batch.y).sum().item()
         batch_TP = ((preds == 1) & (batch.y == 1)).sum().item()
         batch_FP = ((preds == 1) & (batch.y == 0)).sum().item()
@@ -123,7 +118,6 @@ def evaluate_epoch(model, loader, criterion, device, epoch):
         FN += batch_FN
         TN += batch_TN
         
-        # Update progress bar (this is just visual feedback, not W&B logging)
         current_loss = total_loss / total_nodes
         current_acc = correct / total_nodes
         pbar.set_postfix({
@@ -131,7 +125,6 @@ def evaluate_epoch(model, loader, criterion, device, epoch):
             'acc': f'{current_acc:.3f}'
         })
     
-    # Calculate metrics
     eps = 1e-9
     avg_loss = total_loss / total_nodes
     accuracy = correct / total_nodes
@@ -139,12 +132,10 @@ def evaluate_epoch(model, loader, criterion, device, epoch):
     recall = TP / (TP + FN + eps)
     f1 = 2 * precision * recall / (precision + recall + eps)
     
-    # Additional analysis
     all_probs = np.array(all_probs)
     all_preds = np.array(all_preds)
     all_labels = np.array(all_labels)
     
-    # Confidence statistics
     avg_confidence = all_probs.mean()
     pos_confidence = all_probs[all_labels == 1].mean() if (all_labels == 1).sum() > 0 else 0
     neg_confidence = 1 - all_probs[all_labels == 0].mean() if (all_labels == 0).sum() > 0 else 0
@@ -180,14 +171,12 @@ def create_scheduler(optimizer, config):
 def run_training_with_tracking(model, train_loader, val_loader, config, resume_id=None):
     """Main training loop with FIXED consolidated experiment tracking."""
     
-    # Initialize FIXED experiment tracker
     tracker = ExperimentTracker(config, resume_id=resume_id)
     
     try:
         device = config.system.device
         model = model.to(device)
         
-        # Setup optimizer and scheduler
         optimizer = optim.AdamW(
             model.parameters(), 
             lr=config.training.learning_rate, 
@@ -195,13 +184,11 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
         )
         scheduler = create_scheduler(optimizer, config)
         
-        # Setup loss function
         criterion = FocalLoss(
             alpha=config.training.focal_alpha, 
             gamma=config.training.focal_gamma
         )
         
-        # Training state
         best_val_f1 = 0.0
         best_epoch = 0
         
@@ -216,19 +203,16 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
             if epoch_start_time:
                 epoch_start_time.record()
             
-            # Training (removed tracker parameter)
             train_metrics = train_epoch(model, train_loader, criterion, optimizer, device, epoch)
             
             # Validation
             val_metrics = evaluate_epoch(model, val_loader, criterion, device, epoch)
             
-            # Scheduler step
             if isinstance(scheduler, ReduceLROnPlateau):
                 scheduler.step(val_metrics['f1'])
             else:
                 scheduler.step()
             
-            # Update learning rate in tracker
             current_lr = scheduler.get_last_lr()[0] if hasattr(scheduler, 'get_last_lr') else config.training.learning_rate
             tracker.set_current_lr(current_lr)
             
@@ -238,13 +222,12 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
                 epoch_time = epoch_start_time.elapsed_time(epoch_end_time) / 1000.0  # seconds
                 train_metrics['epoch_time_seconds'] = epoch_time
             
-            # CONSOLIDATED LOGGING - Single call with all metrics
             tracker.log_epoch_metrics(
                 train_metrics=train_metrics,
                 val_metrics=val_metrics,
                 epoch=epoch,
-                model=model,  # For gradient logging
-                val_loader=val_loader,  # For prediction logging
+                model=model,
+                val_loader=val_loader,
                 device=device
             )
             
@@ -254,10 +237,8 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
                 best_val_f1 = val_metrics['f1']
                 best_epoch = epoch
             
-            # Save checkpoint (local only)
             tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best)
             
-            # Print progress
             print(f"Epoch {epoch:02d} | "
                   f"Train: L={train_metrics['loss']:.4f} F1={train_metrics['f1']:.3f} | "
                   f"Val: L={val_metrics['loss']:.4f} F1={val_metrics['f1']:.3f} Acc={val_metrics['accuracy']*100:.1f}% | "
@@ -269,7 +250,6 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
         return model, best_val_f1
     
     finally:
-        # Always clean up tracker
         tracker.finish()
 
 class FocalLoss(nn.Module):
