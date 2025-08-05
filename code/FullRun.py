@@ -211,7 +211,6 @@ def run_hyperparameter_sweep():
         with wandb.init() as run:
             sweep_config = wandb.config
             
-            # Create config with sweep parameters
             config = Config(**HYPEROPT_CONFIG)
             
             if hasattr(sweep_config, 'learning_rate'):
@@ -230,7 +229,7 @@ def run_hyperparameter_sweep():
                 batch_size=config.training.batch_size,
                 val_ratio=config.training.val_ratio,
                 seed=config.data.seed,
-                num_workers=2,  # Reduce for sweep
+                num_workers=2,
             )
             
             model = GAT(

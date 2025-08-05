@@ -287,7 +287,6 @@ class ExperimentTracker:
             torch.save(checkpoint, best_path)
             print(f"Best model saved: {best_path}")
             
-            # Log that we saved the best model (will be included in next epoch log)
             wandb.log({
                 "best_model/epoch": epoch, 
                 "best_model/saved": 1,
