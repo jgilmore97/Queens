@@ -408,7 +408,7 @@ def expand_board_dataset(seed_dataset, target_size=5000):
 
         for entry in tqdm(list(available_pool), desc=f"Mutating (Round {round_count})"):
             base_region   = entry["region"]
-            root_source   = entry["source"]      # already the seed filename
+            root_source   = entry["source"]
             parent_iter   = entry["iteration"]
 
             try:
@@ -440,7 +440,7 @@ def expand_board_dataset(seed_dataset, target_size=5000):
                     "region"          : new_region,
                     "queen_positions" : positions,
                     "solution_board"  : solution_board,
-                    "source"          : root_source,          # propagate root seed filename
+                    "source"          : root_source,
                     "iteration"       : parent_iter + 1
                 }
 
@@ -463,7 +463,7 @@ def expand_board_dataset(seed_dataset, target_size=5000):
             print("No successful mutations this round — stopping early.")
             break
 
-        available_pool = next_pool   # advance to next generation
+        available_pool = next_pool
 
     print(f"\n Finished: {len(generated_dataset)} boards generated.\n")
     print("Offspring per seed:")
