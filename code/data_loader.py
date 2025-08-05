@@ -9,152 +9,188 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
-from torch_geometric.data import InMemoryDataset, Data
+from torch_geometric.data import Data, Dataset 
 from torch_geometric.loader import DataLoader
 
-
-class EdgeIndexCache:
-    """Cache for row/col/diag edges by board size."""
-    def __init__(self):
-        self._cache: Dict[int, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
-
-    def get(self, n: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        if n not in self._cache:
-            self._cache[n] = self._compute(n)
-        return self._cache[n]
-
-    def _compute(self, n: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        idx = np.arange(n * n, dtype=np.int64).reshape(n, n)
-        # Rows
-        rows = []
-        for r in range(n):
-            i, j = np.triu_indices(n, k=1)
-            rows.append(np.stack([idx[r, i], idx[r, j]], axis=1))
-        row_edges = np.vstack(rows)
-        # Cols
-        cols = []
-        for c in range(n):
-            i, j = np.triu_indices(n, k=1)
-            cols.append(np.stack([idx[i, c], idx[j, c]], axis=1))
-        col_edges = np.vstack(cols)
-        # Diagonals
-        diag1 = np.stack([idx[:-1, :-1].ravel(), idx[1:, 1:].ravel()], axis=1)
-        diag2 = np.stack([idx[:-1, 1:].ravel(), idx[1:, :-1].ravel()], axis=1)
-        diag_edges = np.vstack([diag1, diag2])
-        return row_edges, col_edges, diag_edges
-
-
-def _compute_region_edges(region: np.ndarray) -> np.ndarray:
-    flat = region.ravel()
-    uniq, inv = np.unique(flat, return_inverse=True)
-    edges = []
-    for rid in range(len(uniq)):
-        cells = np.where(inv == rid)[0]
-        if len(cells) > 1:
-            i, j = np.triu_indices(len(cells), k=1)
-            edges.append(np.stack([cells[i], cells[j]], axis=1))
-    return np.vstack(edges) if edges else np.zeros((0, 2), dtype=np.int64)
-
-
-def _build_edge_index(region: np.ndarray, cache: EdgeIndexCache) -> torch.Tensor:
+def _build_edge_index(region: np.ndarray) -> torch.Tensor:
+    """Return undirected edge_index tensor capturing Queens constraints."""
     n = region.shape[0]
-    row, col, diag = cache.get(n)
-    reg = _compute_region_edges(region)
-    all_edges = np.vstack([row, col, diag, reg])
-    und = np.vstack([all_edges, all_edges[:, [1, 0]]])
-    return torch.tensor(und.T, dtype=torch.long)
+    idx = np.arange(n * n, dtype=np.int64).reshape(n, n)
+    edges: list[Tuple[int, int]] = []
 
+    # rows
+    for r in range(n):
+        for i, j in combinations(idx[r, :], 2):
+            edges += [(i, j), (j, i)]
+
+    # columns
+    for c in range(n):
+        for i, j in combinations(idx[:, c], 2):
+            edges += [(i, j), (j, i)]
+
+    # regions
+    for reg in np.unique(region):
+        nodes = idx[region == reg].ravel()
+        for i, j in combinations(nodes, 2):
+            edges += [(i, j), (j, i)]
+
+    # immediate diagonals
+    for r in range(n - 1):
+        for c in range(n - 1):
+            a, b = idx[r, c], idx[r + 1, c + 1]  # ↘
+            edges += [(a, b), (b, a)]
+        for c in range(1, n):
+            a, b = idx[r, c], idx[r + 1, c - 1]  # ↙
+            edges += [(a, b), (b, a)]
+
+    return torch.tensor(edges, dtype=torch.long).t().contiguous()
+
+
+#--------------------------------------------------------------
+# 2.  Utility – deterministic group‐aware splitter
+#--------------------------------------------------------------
 
 def _canonical_img_key(src: str) -> str:
-    m = re.match(r"^(.*?\.jpg)", src, re.IGNORECASE)
+    """IMG_5193.jpg_rot0  →  IMG_5193.jpg"""
+
+    _IMG_RE = re.compile(r"^(.*?\.jpg)", re.IGNORECASE)
+
+    m = _IMG_RE.match(src)
     if not m:
-        raise ValueError(f"Bad source='{src}'")
+        raise ValueError(f"Could not parse image key from source='{src}'")
     return m.group(1)
 
 
-def _split_by_img(records: List[dict], val_ratio: float, seed: int) -> tuple[List[dict], List[dict]]:
-    groups: Dict[str, List[dict]] = {}
-    for r in records:
-        key = _canonical_img_key(r["source"])
-        groups.setdefault(key, []).append(r)
+def _split_by_img(
+    records: List[dict],
+    val_ratio: float,
+    seed: int,
+) -> tuple[list[dict], list[dict]]:
+    """Group records by photo, then split groups into train / val."""
+    # --- group
+    groups: Dict[str, list[dict]] = {}
+    for rec in records:
+        groups.setdefault(_canonical_img_key(rec["source"]), []).append(rec)
+
+    # --- shuffle group keys deterministically
     keys = list(groups)
     rng = random.Random(seed)
     rng.shuffle(keys)
+
+    # --- allocate to val / train
     n_val = int(len(keys) * val_ratio)
     val_keys = set(keys[:n_val])
+
     train, val = [], []
     for k, recs in groups.items():
         (val if k in val_keys else train).extend(recs)
+
     return train, val
 
+class QueensDataset(Dataset):
+    """
+    PyTorch Geometric Dataset for the Queens puzzle.
+    - Region IDs are one-hot encoded and padded to the largest board in the JSON.
+    - Row/col coordinates are min-max scaled to the [0 , 1] range.
+    
+    FIXED: Removed edge caching to avoid pickle/unpickle issues with PyTorch 2.6
+    """
 
-class QueensDataset(InMemoryDataset):
-    """In-memory Queens dataset with pre-built graphs and feature caching."""
+    # cache of (train, val) splits so multiple Dataset instances reuse work
+    _cache: Dict[tuple[Path, float, int], Tuple[list[dict], list[dict]]] = {}
+
     def __init__(
         self,
         json_path: str | Path,
-        split: str = "all",
+        *,
+        split: str = "train",
         val_ratio: float = 0.2,
         seed: int = 42,
         transform=None,
         pre_transform=None,
     ):
-        self.json_path = Path(json_path).expanduser()
         if split not in {"train", "val", "all"}:
             raise ValueError("split must be 'train', 'val', or 'all'")
-        self.split = split
-        self.val_ratio = val_ratio
-        self.seed = seed
-        self.cache = EdgeIndexCache()
-        root = str(self.json_path.parent)
-        super().__init__(root, transform, pre_transform)
-        self.data, self.slices = torch.load(self.processed_paths[0])
 
-    @property
-    def raw_file_names(self) -> List[str]:
-        return [self.json_path.name]
+        super().__init__(None, transform, pre_transform)
 
-    @property
-    def processed_file_names(self) -> List[str]:
-        return [f"data_{self.split}.pt"]
+        self.json_path   = Path(json_path).expanduser()
+        self.val_ratio   = val_ratio
+        self.seed        = seed
 
-    def download(self):
-        pass
+        # ------------------------------------------------------
+        # 1) build / fetch cached train-val split
+        # ------------------------------------------------------
+        key = (self.json_path, val_ratio, seed)
+        if key not in self._cache:
+            records          = json.loads(self.json_path.read_text())
+            train, val       = _split_by_img(records, val_ratio, seed)
+            self._cache[key] = (train, val)
 
-    def process(self):
-        records = json.loads(self.json_path.read_text())
-        train, val = _split_by_img(records, self.val_ratio, self.seed)
-        if self.split == "train":
-            subset = train
-        elif self.split == "val":
-            subset = val
-        else:
-            subset = train + val
+        train_set, val_set = self._cache[key]
 
-        max_regions = max(int(np.max(r["region"])) + 1 for r in subset)
-        data_list = []
-        for rec in subset:
-            region = np.asarray(rec["region"], dtype=np.int64)
-            partial = np.asarray(rec["partial_board"], dtype=np.int64)
-            label = np.asarray(rec["label_board"], dtype=np.int64)
-            n = region.shape[0]
-            N2 = n * n
-            coords = np.indices((n, n)).reshape(2, -1).T.astype(np.float32) / (n - 1)
-            onehot = np.zeros((N2, max_regions), dtype=np.float32)
-            ids = region.ravel()
-            onehot[np.arange(N2), ids] = 1.0
-            hasq = partial.ravel()[:, None].astype(np.float32)
-            x = torch.from_numpy(np.hstack([coords, onehot, hasq]))
-            y = torch.from_numpy(label.ravel().astype(np.int64))
-            ei = _build_edge_index(region, self.cache)
-            data_list.append(Data(x=x, edge_index=ei, y=y, n=torch.tensor([n]), step=torch.tensor([rec.get("step",0)]), meta=dict(source=rec.get("source"), iteration=rec.get("iteration"))))
+        # ------------------------------------------------------
+        # 2) expose requested subset
+        # ------------------------------------------------------
+        self.records = (
+            train_set if split == "train"
+            else val_set if split == "val"
+            else train_set + val_set
+        )
 
-        if self.pre_transform:
-            data_list = [self.pre_transform(d) for d in data_list]
-        data, slices = self.collate(data_list)
-        torch.save((data, slices), self.processed_paths[0])
+        # ------------------------------------------------------
+        # 3) largest region count in the whole JSON → padding size
+        # ------------------------------------------------------
+        self.max_regions = max(
+            int(np.max(r["region"])) + 1
+            for r in (train_set + val_set)
+        )
 
+    # ------------------------------------------------------------------
+    # PyG Dataset hooks
+    # ------------------------------------------------------------------
+    def len(self) -> int:  # noqa: D401
+        return len(self.records)
 
+    def get(self, idx: int) -> Data:  # noqa: D401
+        e = self.records[idx]
+
+        region  = np.asarray(e["region"],        dtype=np.int64)   # (n, n)
+        partial = np.asarray(e["partial_board"], dtype=np.int64)   # (n, n)
+        label   = np.asarray(e["label_board"],   dtype=np.int64)   # (n, n)
+        n       = region.shape[0]
+        N2      = n * n
+
+        # --- node features ---------------------------------------------
+        # 1) scaled coordinates
+        coords = np.indices((n, n)).reshape(2, -1).T.astype(np.float32) / (n - 1)  # (N², 2)
+
+        # 2) padded one-hot region
+        reg_onehot = np.zeros((N2, self.max_regions), dtype=np.float32)
+        flat_ids   = region.flatten()
+        reg_onehot[np.arange(N2), flat_ids] = 1.0                                  # (N², R)
+
+        # 3) has-queen flag
+        has_q = partial.flatten()[:, None].astype(np.float32)                      # (N², 1)
+
+        x = torch.from_numpy(np.hstack([coords, reg_onehot, has_q]))               # (N², 3+R)
+
+        # --- label -------------------------------------------------------
+        y = torch.from_numpy(label.flatten().astype(np.int64))                     # (N²,)
+
+        # --- edge_index (rebuilt each time - no caching) ----------------
+        edge_index = _build_edge_index(region)
+
+        # --- assemble Data object ---------------------------------------
+        return Data(
+            x=x,
+            edge_index=edge_index,
+            y=y,
+            n=torch.tensor([n], dtype=torch.long),
+            step=torch.tensor([e["step"]], dtype=torch.long),
+            meta=dict(source=e["source"], iteration=e["iteration"]),
+        )
+    
 def get_queens_loaders(
     json_path: str,
     *,
@@ -165,10 +201,54 @@ def get_queens_loaders(
     pin_memory: bool = True,
     follow_batch: list[str] | None = None,
     shuffle_train: bool = True,
-) -> tuple[DataLoader, DataLoader]:
-    ds_train = QueensDataset(json_path, split="train", val_ratio=val_ratio, seed=seed)
-    ds_val = QueensDataset(json_path, split="val",   val_ratio=val_ratio, seed=seed)
-    kwargs = dict(batch_size=batch_size, num_workers=num_workers, pin_memory=pin_memory, follow_batch=follow_batch or [])
+):
+    """
+    Return (train_loader, val_loader).
+
+    Parameters
+    ----------
+    json_path : str
+        Path to the *master* JSON file (non-test records).
+    batch_size : int, default 32
+        Batch size for both loaders.
+    val_ratio : float, default 0.20
+        Fraction of distinct image sources that go into validation.
+        Must match between train and val loaders.
+    seed : int, default 42
+        Random seed for deterministic split.
+    num_workers : int, default 0
+        Passed straight to `torch_geometric.loader.DataLoader`.
+    pin_memory : bool, default True
+        Pin memory for faster host-to-GPU transfers.
+    follow_batch : list[str] | None
+        Optional list of attribute names to generate *_batch vectors
+        (e.g. ["x"] if you need node-wise batch IDs).
+    shuffle_train : bool, default True
+        Whether to shuffle the training loader each epoch.
+    """
+    # -------- datasets ----------------------------------------
+    ds_train = QueensDataset(
+        json_path,
+        split="train",
+        val_ratio=val_ratio,
+        seed=seed,
+    )
+    ds_val = QueensDataset(
+        json_path,
+        split="val",
+        val_ratio=val_ratio,
+        seed=seed,
+    )
+
+    # -------- loaders -----------------------------------------
+    kwargs = dict(
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        follow_batch=follow_batch or [],
+    )
+
     train_loader = DataLoader(ds_train, shuffle=shuffle_train, **kwargs)
     val_loader   = DataLoader(ds_val,   shuffle=False,        **kwargs)
+
     return train_loader, val_loader

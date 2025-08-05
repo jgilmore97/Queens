@@ -16,7 +16,7 @@ class ModelConfig:
 class TrainingConfig:
     """Training hyperparameters."""
     epochs: int = 30
-    batch_size: int = 512
+    batch_size: int = 32
     learning_rate: float = 1e-3
     weight_decay: float = 1e-5
     val_ratio: float = 0.10
