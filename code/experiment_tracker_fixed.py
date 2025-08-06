@@ -227,37 +227,61 @@ class ExperimentTracker:
         return name
     
     def _compute_prediction_metrics(self, model: torch.nn.Module, val_loader, device: str) -> Dict[str, float]:
-        """Compute prediction statistics and return as dict."""
-        model.eval()
-        predictions_logged = 0
-        max_predictions = 5
-        
-        pred_metrics = {}
-        
-        with torch.no_grad():
-            for batch in val_loader:
-                if predictions_logged >= max_predictions:
-                    break
+            """Compute prediction statistics and return as dict."""
+            model.eval()
+            predictions_logged = 0
+            max_predictions = 5
+            
+            pred_metrics = {}
+            
+            with torch.no_grad():
+                for batch in val_loader:
+                    if predictions_logged >= max_predictions:
+                        break
+                        
+                    batch = batch.to(device)
                     
-                batch = batch.to(device)
-                logits = model(batch.x, batch.edge_index)
-                probs = torch.sigmoid(logits)
-                preds = (logits > 0).long()
-                
-                accuracy = (preds == batch.y).float().mean().item()
-                avg_confidence = probs.mean().item()
-                positive_rate = preds.float().mean().item()
-                
-                pred_metrics.update({
-                    f"predictions/sample_{predictions_logged}_accuracy": accuracy,
-                    f"predictions/sample_{predictions_logged}_confidence": avg_confidence,
-                    f"predictions/sample_{predictions_logged}_positive_rate": positive_rate,
-                })
-                
-                predictions_logged += 1
-        
-        model.train()
-        return pred_metrics
+                    # Handle both homogeneous and heterogeneous data
+                    try:
+                        # Try heterogeneous first
+                        if hasattr(batch, '__getitem__') and 'cell' in batch:
+                            # Heterogeneous data
+                            x_dict = {'cell': batch['cell'].x}
+                            edge_index_dict = {
+                                ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
+                                ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
+                                ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
+                            }
+                            logits = model(x_dict, edge_index_dict)
+                            labels = batch['cell'].y
+                        else:
+                            # Homogeneous data
+                            logits = model(batch.x, batch.edge_index)
+                            labels = batch.y
+                            
+                        probs = torch.sigmoid(logits)
+                        preds = (logits > 0).long()
+                        
+                        accuracy = (preds == labels).float().mean().item()
+                        avg_confidence = probs.mean().item()
+                        positive_rate = preds.float().mean().item()
+                        
+                        pred_metrics.update({
+                            f"predictions/sample_{predictions_logged}_accuracy": accuracy,
+                            f"predictions/sample_{predictions_logged}_confidence": avg_confidence,
+                            f"predictions/sample_{predictions_logged}_positive_rate": positive_rate,
+                        })
+                        
+                        predictions_logged += 1
+                        
+                    except Exception as e:
+                        # Skip this batch if there's an error and log it
+                        print(f"Warning: Could not compute prediction metrics for batch {predictions_logged}: {e}")
+                        predictions_logged += 1
+                        continue
+            
+            model.train()
+            return pred_metrics
     
     def save_checkpoint(self, model: torch.nn.Module, optimizer, epoch: int, 
                        metrics: Dict[str, float], is_best: bool = False):
