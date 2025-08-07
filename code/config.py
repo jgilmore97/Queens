@@ -10,7 +10,10 @@ class ModelConfig:
     layer_count: int = 3
     dropout: float = 0.2
     heads: int = 2
-    model_type: str = "GAT"  # "GAT" or "GNN"
+    model_type: str = "GAT"  # "GAT", "HeteroGAT", or "GNN"
+    
+    # Heterogeneous model specific settings
+    hetero_aggr: str = "sum"  # How to aggregate messages from different edge types: "sum", "mean", "max"
 
 @dataclass
 class TrainingConfig:

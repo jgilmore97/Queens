@@ -9,41 +9,58 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
-from torch_geometric.data import Data, Dataset 
+from torch_geometric.data import Data, HeteroData, Dataset 
 from torch_geometric.loader import DataLoader
 
-def _build_edge_index(region: np.ndarray) -> torch.Tensor:
-    """Return undirected edge_index tensor capturing Queens constraints."""
+def _build_heterogeneous_edge_index(region: np.ndarray) -> Dict[str, torch.Tensor]:
+    """Return dictionary of edge_index tensors for each constraint type."""
     n = region.shape[0]
     idx = np.arange(n * n, dtype=np.int64).reshape(n, n)
-    edges: list[Tuple[int, int]] = []
+    
+    # Dictionary to store different edge types
+    edge_dict = {
+        'line_constraint': [],
+        'region_constraint': [],
+        'diagonal_constraint': []
+    }
 
-    # rows
+    # LINE CONSTRAINTS (rows and columns combined)
+    # Rows
     for r in range(n):
         for i, j in combinations(idx[r, :], 2):
-            edges += [(i, j), (j, i)]
-
-    # columns
+            edge_dict['line_constraint'].extend([(i, j), (j, i)])
+    
+    # Columns
     for c in range(n):
         for i, j in combinations(idx[:, c], 2):
-            edges += [(i, j), (j, i)]
+            edge_dict['line_constraint'].extend([(i, j), (j, i)])
 
-    # regions
+    # REGION CONSTRAINTS (same color)
     for reg in np.unique(region):
         nodes = idx[region == reg].ravel()
         for i, j in combinations(nodes, 2):
-            edges += [(i, j), (j, i)]
+            edge_dict['region_constraint'].extend([(i, j), (j, i)])
 
-    # immediate diagonals
+    # DIAGONAL CONSTRAINTS
     for r in range(n - 1):
         for c in range(n - 1):
-            a, b = idx[r, c], idx[r + 1, c + 1]  # ↘
-            edges += [(a, b), (b, a)]
+            # Down right
+            a, b = idx[r, c], idx[r + 1, c + 1]
+            edge_dict['diagonal_constraint'].extend([(a, b), (b, a)])
         for c in range(1, n):
-            a, b = idx[r, c], idx[r + 1, c - 1]  # ↙
-            edges += [(a, b), (b, a)]
+            # Down left
+            a, b = idx[r, c], idx[r + 1, c - 1]
+            edge_dict['diagonal_constraint'].extend([(a, b), (b, a)])
 
-    return torch.tensor(edges, dtype=torch.long).t().contiguous()
+    # Convert to tensors
+    hetero_edge_index = {}
+    for edge_type, edges in edge_dict.items():
+        if edges: 
+            hetero_edge_index[edge_type] = torch.tensor(edges, dtype=torch.long).t().contiguous()
+        else:
+            hetero_edge_index[edge_type] = torch.empty((2, 0), dtype=torch.long)
+
+    return hetero_edge_index
 
 
 #--------------------------------------------------------------
@@ -89,11 +106,10 @@ def _split_by_img(
 
 class QueensDataset(Dataset):
     """
-    PyTorch Geometric Dataset for the Queens puzzle.
+    PyTorch Geometric Dataset for the Queens puzzle with heterogeneous edges.
     - Region IDs are one-hot encoded and padded to the largest board in the JSON.
     - Row/col coordinates are min-max scaled to the [0 , 1] range.
-    
-    FIXED: Removed edge caching to avoid pickle/unpickle issues with PyTorch 2.6
+    - Returns HeteroData objects with separate edge types for different constraints.
     """
 
     # cache of (train, val) splits so multiple Dataset instances reuse work
@@ -146,13 +162,11 @@ class QueensDataset(Dataset):
             for r in (train_set + val_set)
         )
 
-    # ------------------------------------------------------------------
     # PyG Dataset hooks
-    # ------------------------------------------------------------------
     def len(self) -> int:  # noqa: D401
         return len(self.records)
 
-    def get(self, idx: int) -> Data:  # noqa: D401
+    def get(self, idx: int) -> HeteroData:
         e = self.records[idx]
 
         region  = np.asarray(e["region"],        dtype=np.int64)   # (n, n)
@@ -178,18 +192,26 @@ class QueensDataset(Dataset):
         # --- label -------------------------------------------------------
         y = torch.from_numpy(label.flatten().astype(np.int64))                     # (N²,)
 
-        # --- edge_index (rebuilt each time - no caching) ----------------
-        edge_index = _build_edge_index(region)
+        # --- heterogeneous edge_index ------------------------------------
+        hetero_edge_index = _build_heterogeneous_edge_index(region)
 
-        # --- assemble Data object ---------------------------------------
-        return Data(
-            x=x,
-            edge_index=edge_index,
-            y=y,
-            n=torch.tensor([n], dtype=torch.long),
-            step=torch.tensor([e["step"]], dtype=torch.long),
-            meta=dict(source=e["source"], iteration=e["iteration"]),
-        )
+        # --- assemble HeteroData object ----------------------------------
+        data = HeteroData()
+        
+        # Add node information (all nodes are the same type - 'cell')
+        data['cell'].x = x
+        data['cell'].y = y
+        
+        # Add edge information for each constraint type
+        for edge_type, edge_index in hetero_edge_index.items():
+            data['cell', edge_type, 'cell'].edge_index = edge_index
+        
+        # Add metadata
+        data.n = torch.tensor([n], dtype=torch.long)
+        data.step = torch.tensor([e["step"]], dtype=torch.long)
+        data.meta = dict(source=e["source"], iteration=e["iteration"])
+
+        return data
     
 def get_queens_loaders(
     json_path: str,
@@ -203,7 +225,7 @@ def get_queens_loaders(
     shuffle_train: bool = True,
 ):
     """
-    Return (train_loader, val_loader).
+    Return (train_loader, val_loader) with heterogeneous edge support.
 
     Parameters
     ----------

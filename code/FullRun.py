@@ -2,9 +2,8 @@ import os
 import torch
 from pathlib import Path
 
-# Import all necessary modules
-from train import run_training_with_tracking, FocalLoss
-from model import GAT
+from train import run_training_with_tracking, FocalLoss, run_training_with_tracking_hetero, train_epoch_hetero, evaluate_epoch_hetero, calculate_top1_metrics_hetero
+from model import GAT, HeteroGAT
 from data_loader import get_queens_loaders, QueensDataset
 from config import Config, BASELINE_CONFIG, HYPEROPT_CONFIG
 from experiment_tracker_fixed import ExperimentTracker, create_wandb_sweep, EXAMPLE_SWEEP_CONFIG
@@ -23,50 +22,55 @@ def set_seed(seed=42):
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
-def main_training():
-    """Main training function with experiment tracking."""
+def main_heterogeneous_training():
+    """Main training function with heterogeneous GAT and experiment tracking."""
     
     set_seed(42)
     
-    config = Config(**BASELINE_CONFIG)
+    # Create config for heterogeneous experiment
+    hetero_config = Config(**BASELINE_CONFIG)
     
-    # Override specific settings if needed
-    config.data.train_json = "10k_training_set_with_states.json"
-    config.data.test_json = "test_set_with_states.json"
-    config.training.epochs = 30
-    config.training.batch_size = 512
+    # Override specific settings
+    hetero_config.data.train_json = "10k_training_set_with_states.json"
+    hetero_config.data.test_json = "test_set_with_states.json"
+    hetero_config.training.epochs = 30
+    hetero_config.training.batch_size = 512
     
-    config.experiment.experiment_name = "baseline_gat_v1"
-    config.experiment.tags = ["baseline", "gat", "focal_loss"]
-    config.experiment.notes = "Baseline GAT model with improved tracking and focal loss"
+    hetero_config.experiment.experiment_name = "hetero_gat_v1"
+    hetero_config.experiment.tags = ["heterogeneous", "gat", "focal_loss", "multi_constraint"]
+    hetero_config.experiment.notes = "Heterogeneous GAT with separate edge types for line/region/diagonal constraints"
     
-    print("=== Queens Puzzle ML Training ===")
-    print(f"Device: {config.system.device}")
-    print(f"Experiment: {config.experiment.experiment_name}")
+    print("=== Queens Puzzle ML Training - HETEROGENEOUS ===")
+    print(f"Device: {hetero_config.system.device}")
+    print(f"Experiment: {hetero_config.experiment.experiment_name}")
+    print("🔗 Using heterogeneous edges with constraint-specific attention")
     
     # Load data (train/val only)
     print("\n Loading datasets...")
     train_loader, val_loader = get_queens_loaders(
-        config.data.train_json,
-        batch_size=config.training.batch_size,
-        val_ratio=config.training.val_ratio,
-        seed=config.data.seed,
-        num_workers=config.data.num_workers,
-        pin_memory=config.data.pin_memory,
-        shuffle_train=config.data.shuffle_train,
+        hetero_config.data.train_json,
+        batch_size=hetero_config.training.batch_size,
+        val_ratio=hetero_config.training.val_ratio,
+        seed=hetero_config.data.seed,
+        num_workers=hetero_config.data.num_workers,
+        pin_memory=hetero_config.data.pin_memory,
+        shuffle_train=hetero_config.data.shuffle_train,
     )
     
     print(f"Train samples: {len(train_loader.dataset):,}")
     print(f"Val samples: {len(val_loader.dataset):,}")
     print("Test set reserved for final evaluation only")
     
-    print(f"\n Creating {config.model.model_type} model...")
-    model = GAT(
-        input_dim=config.model.input_dim,
-        hidden_dim=config.model.hidden_dim,
-        layer_count=config.model.layer_count,
-        dropout=config.model.dropout,
-        heads=config.model.heads
+    print(f"\n Creating HETEROGENEOUS {hetero_config.model.model_type} model...")
+    print("Edge types: line_constraint, region_constraint, diagonal_constraint")
+    
+    # Create heterogeneous model
+    model = HeteroGAT(
+        input_dim=hetero_config.model.input_dim,
+        hidden_dim=hetero_config.model.hidden_dim,
+        layer_count=hetero_config.model.layer_count,
+        dropout=hetero_config.model.dropout,
+        heads=hetero_config.model.heads
     )
     
     total_params = sum(p.numel() for p in model.parameters())
@@ -74,17 +78,18 @@ def main_training():
     print(f"Total parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")
     
-    print(f"\n Starting training for {config.training.epochs} epochs...")
+    print(f"\n Starting HETEROGENEOUS training for {hetero_config.training.epochs} epochs...")
     
     try:
-        model, best_f1 = run_training_with_tracking(
+        model, best_f1 = run_training_with_tracking_hetero(
             model=model,
             train_loader=train_loader,
             val_loader=val_loader,
-            config=config
+            config=hetero_config
         )
         
-        print(f"\n Training completed! Best validation F1: {best_f1:.4f}")
+        print(f"\n HETEROGENEOUS training completed! Best validation F1: {best_f1:.4f}")
+        print("🎯 Each constraint type learned specialized attention patterns")
         print("Model checkpoints saved for future test evaluation")
         
         return model, best_f1
@@ -96,177 +101,115 @@ def main_training():
         print(f"\n Training failed with error: {e}")
         raise
 
-def evaluate_test_set(model, test_loader, config):
-    """
-    RESERVED FOR FINAL MODEL EVALUATION ONLY!
+def compare_homogeneous_vs_heterogeneous():
+    """Run both homogeneous and heterogeneous models for comparison."""
     
-    This function should only be called with your final, best model
-    after all experimentation is complete. Using the test set during
-    development can lead to overfitting to the test data.
-    """
-    print("WARNING: Evaluating on TEST SET")
+    print("🔬 COMPARISON EXPERIMENT: Homogeneous vs Heterogeneous GAT")
+    print("=" * 60)
     
-    device = config.system.device
-    model.eval()
+    set_seed(42)
     
-    criterion = FocalLoss(
-        alpha=config.training.focal_alpha,
-        gamma=config.training.focal_gamma
-    )
+    # Shared config
+    config = Config(**BASELINE_CONFIG)
+    config.data.train_json = "10k_training_set_with_states.json"
+    config.training.epochs = 20  # Shorter for comparison
+    config.training.batch_size = 512
     
-    total_loss, total_nodes = 0.0, 0
-    correct, TP, FP, FN, TN = 0, 0, 0, 0, 0
-    
-    print("Evaluating on test set...")
-    with torch.no_grad():
-        for batch in test_loader:
-            batch = batch.to(device)
-            logits = model(batch.x, batch.edge_index)
-            loss = criterion(logits, batch.y.float())
-            
-            preds = (logits > 0).long()
-            
-            total_loss += loss.item() * batch.num_nodes
-            total_nodes += batch.num_nodes
-            correct += (preds == batch.y).sum().item()
-            
-            TP += ((preds == 1) & (batch.y == 1)).sum().item()
-            FP += ((preds == 1) & (batch.y == 0)).sum().item()
-            FN += ((preds == 0) & (batch.y == 1)).sum().item()
-            TN += ((preds == 0) & (batch.y == 0)).sum().item()
-    
-    eps = 1e-9
-    test_loss = total_loss / total_nodes
-    test_acc = correct / total_nodes
-    test_prec = TP / (TP + FP + eps)
-    test_rec = TP / (TP + FN + eps)
-    test_f1 = 2 * test_prec * test_rec / (test_prec + test_rec + eps)
-    
-    return {
-        'loss': test_loss,
-        'accuracy': test_acc,
-        'precision': test_prec,
-        'recall': test_rec,
-        'f1': test_f1
-    }
-
-def final_test_evaluation(model_checkpoint_path, config):
-    """
-    Load best model and evaluate on test set.
-    Only use this function when you're done with all experiments!
-    """
-    print("FINAL TEST EVALUATION")
-    print("Loading test dataset...")
-    
-    test_dataset = QueensDataset(
-        config.data.test_json,
-        split="all",
-        val_ratio=0.0,
-        seed=config.data.seed,
-    )
-    test_loader = DataLoader(
-        test_dataset,
+    # Load data once
+    train_loader, val_loader = get_queens_loaders(
+        config.data.train_json,
         batch_size=config.training.batch_size,
-        shuffle=False,
+        val_ratio=config.training.val_ratio,
+        seed=config.data.seed,
         num_workers=config.data.num_workers,
-        pin_memory=config.data.pin_memory,
+        shuffle_train=config.data.shuffle_train,
     )
     
-    print(f"Test samples: {len(test_dataset):,}")
+    results = {}
     
-    print(f"Loading model from {model_checkpoint_path}")
-    checkpoint = torch.load(model_checkpoint_path, map_location=config.system.device)
+    # 1. HOMOGENEOUS MODEL
+    print("\n🏠 Training HOMOGENEOUS GAT...")
+    homo_config = config
+    homo_config.experiment.experiment_name = "comparison_homo_gat"
+    homo_config.experiment.tags = ["comparison", "homogeneous", "gat"]
     
-    model = GAT(
+    homo_model = GAT(
         input_dim=config.model.input_dim,
         hidden_dim=config.model.hidden_dim,
         layer_count=config.model.layer_count,
         dropout=config.model.dropout,
         heads=config.model.heads
     )
-    model.load_state_dict(checkpoint['model_state_dict'])
     
-    test_metrics = evaluate_test_set(model, test_loader, config)
+    try:
+        homo_model, homo_f1 = run_training_with_tracking(
+            model=homo_model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            config=homo_config
+        )
+        results['homogeneous'] = homo_f1
+        print(f"✅ Homogeneous F1: {homo_f1:.4f}")
+    except Exception as e:
+        print(f"❌ Homogeneous training failed: {e}")
+        results['homogeneous'] = 0.0
     
-    print("\n🎯 FINAL TEST RESULTS:")
-    print(f"  Loss: {test_metrics['loss']:.4f}")
-    print(f"  Accuracy: {test_metrics['accuracy']*100:.2f}%")
-    print(f"  Precision: {test_metrics['precision']:.4f}")
-    print(f"  Recall: {test_metrics['recall']:.4f}")
-    print(f"  F1 Score: {test_metrics['f1']:.4f}")
+    # 2. HETEROGENEOUS MODEL  
+    print("\n🔗 Training HETEROGENEOUS GAT...")
+    hetero_config = config
+    hetero_config.experiment.experiment_name = "comparison_hetero_gat"
+    hetero_config.experiment.tags = ["comparison", "heterogeneous", "gat"]
     
-    return test_metrics
-
-def run_hyperparameter_sweep():
-    """Run hyperparameter optimization sweep."""
-    print("🔍 Setting up hyperparameter sweep...")
-    
-    sweep_id = create_wandb_sweep(
-        config=EXAMPLE_SWEEP_CONFIG,
-        project_name="queens-puzzle-ml"
+    hetero_model = HeteroGAT(
+        input_dim=config.model.input_dim,
+        hidden_dim=config.model.hidden_dim,
+        layer_count=config.model.layer_count,
+        dropout=config.model.dropout,
+        heads=config.model.heads
     )
     
-    def sweep_train():
-        """Training function for sweep."""
-        with wandb.init() as run:
-            sweep_config = wandb.config
-            
-            config = Config(**HYPEROPT_CONFIG)
-            
-            if hasattr(sweep_config, 'learning_rate'):
-                config.training.learning_rate = sweep_config.learning_rate
-            if hasattr(sweep_config, 'hidden_dim'):
-                config.model.hidden_dim = sweep_config.hidden_dim
-            if hasattr(sweep_config, 'dropout'):
-                config.model.dropout = sweep_config.dropout
-            if hasattr(sweep_config, 'focal_gamma'):
-                config.training.focal_gamma = sweep_config.focal_gamma
-            
-            config.experiment.experiment_name = f"sweep_{run.id}"
-            
-            train_loader, val_loader = get_queens_loaders(
-                config.data.train_json,
-                batch_size=config.training.batch_size,
-                val_ratio=config.training.val_ratio,
-                seed=config.data.seed,
-                num_workers=2,
-            )
-            
-            model = GAT(
-                input_dim=config.model.input_dim,
-                hidden_dim=config.model.hidden_dim,
-                layer_count=config.model.layer_count,
-                dropout=config.model.dropout,
-                heads=config.model.heads
-            )
-            
-            try:
-                _, best_f1 = run_training_with_tracking(
-                    model=model,
-                    train_loader=train_loader,
-                    val_loader=val_loader,
-                    config=config
-                )
-                return best_f1
-            except Exception as e:
-                print(f"Sweep run failed: {e}")
-                return 0.0
+    try:
+        hetero_model, hetero_f1 = run_training_with_tracking_hetero(
+            model=hetero_model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            config=hetero_config
+        )
+        results['heterogeneous'] = hetero_f1
+        print(f"✅ Heterogeneous F1: {hetero_f1:.4f}")
+    except Exception as e:
+        print(f"❌ Heterogeneous training failed: {e}")
+        results['heterogeneous'] = 0.0
     
-    print(f"Sweep ID: {sweep_id}")
-    print("To run sweep agents, execute this in a cell:")
-    print(f"!wandb agent {sweep_id}")
+    # RESULTS
+    print("\n" + "=" * 60)
+    print("🏆 COMPARISON RESULTS")
+    print("=" * 60)
+    print(f"Homogeneous GAT:    {results['homogeneous']:.4f}")
+    print(f"Heterogeneous GAT:  {results['heterogeneous']:.4f}")
     
-    return sweep_id, sweep_train
+    if results['heterogeneous'] > results['homogeneous']:
+        improvement = results['heterogeneous'] - results['homogeneous']
+        print(f"🎯 Heterogeneous WINS by {improvement:.4f} F1 points!")
+        print("✨ Constraint-specific attention helps!")
+    elif results['homogeneous'] > results['heterogeneous']:
+        difference = results['homogeneous'] - results['heterogeneous']
+        print(f"🤔 Homogeneous wins by {difference:.4f} F1 points")
+        print("💭 Might need more tuning or the added complexity isn't beneficial")
+    else:
+        print("🤝 It's a tie! Both approaches work similarly well")
+    
+    return results
 
-def quick_test():
-    """Quick test run for debugging."""
-    print("Running quick test...")
+def quick_hetero_test():
+    """Quick test run for debugging heterogeneous model."""
+    print("🧪 Running quick heterogeneous test...")
     
     config = Config()
     config.training.epochs = 2
     config.training.batch_size = 128
-    config.experiment.experiment_name = "quick_test"
-    config.experiment.tags = ["test", "debug"]
+    config.experiment.experiment_name = "quick_hetero_test"
+    config.experiment.tags = ["test", "heterogeneous", "debug"]
     
     train_loader, val_loader = get_queens_loaders(
         config.data.train_json,
@@ -278,7 +221,7 @@ def quick_test():
     config.model.hidden_dim = 128
     config.model.layer_count = 2
     
-    model = GAT(
+    model = HeteroGAT(
         input_dim=config.model.input_dim,
         hidden_dim=config.model.hidden_dim,
         layer_count=config.model.layer_count,
@@ -287,35 +230,76 @@ def quick_test():
     )
     
     try:
-        model, best_f1 = run_training_with_tracking(
+        model, best_f1 = run_training_with_tracking_hetero(
             model=model,
             train_loader=train_loader,
             val_loader=val_loader,
             config=config
         )
-        print(f"Quick test completed! Best validation F1: {best_f1:.4f}")
+        print(f"🎯 Quick heterogeneous test completed! Best validation F1: {best_f1:.4f}")
         return True
     except Exception as e:
-        print(f"Quick test failed: {e}")
+        print(f"❌ Quick heterogeneous test failed: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
-# Helper functions
-def run_baseline_experiment():
-    """Run the baseline experiment - call this in a Colab cell."""
-    return main_training()
+def debug_hetero_data():
+    """Debug heterogeneous data loading."""
+    print("🔍 Debugging heterogeneous data format...")
+    
+    config = Config()
+    train_loader, val_loader = get_queens_loaders(
+        config.data.train_json,
+        batch_size=2,  # Small batch for debugging
+        val_ratio=0.2,
+        num_workers=0,  # No multiprocessing for easier debugging
+    )
+    
+    print("Loading one batch...")
+    batch = next(iter(train_loader))
+    
+    print(f"Batch type: {type(batch)}")
+    print(f"Batch attributes: {dir(batch)}")
+    
+    # Check heterogeneous structure
+    if hasattr(batch, '__getitem__'):
+        print("\nTrying to access heterogeneous structure...")
+        try:
+            print(f"Cell features shape: {batch['cell'].x.shape}")
+            print(f"Cell labels shape: {batch['cell'].y.shape}")
+            
+            edge_types = []
+            for edge_type in [('cell', 'line_constraint', 'cell'), 
+                            ('cell', 'region_constraint', 'cell'),
+                            ('cell', 'diagonal_constraint', 'cell')]:
+                if edge_type in batch.edge_types:
+                    edge_shape = batch[edge_type].edge_index.shape
+                    print(f"Edge {edge_type}: {edge_shape}")
+                    edge_types.append(edge_type)
+            
+            print(f"Available edge types: {edge_types}")
+            
+        except Exception as e:
+            print(f"Error accessing batch structure: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    return batch
 
-def run_quick_debug():
-    """Run a quick debug session - call this in a Colab cell."""
-    return quick_test()
+# Helper functions for easy execution
+def run_heterogeneous_baseline():
+    """Run the heterogeneous baseline experiment - call this in a Colab cell."""
+    return main_heterogeneous_training()
 
-def setup_hyperparameter_sweep():
-    """Set up hyperparameter sweep - call this in a Colab cell."""
-    return run_hyperparameter_sweep()
+def run_model_comparison():
+    """Run comparison between homogeneous and heterogeneous - call this in a Colab cell."""
+    return compare_homogeneous_vs_heterogeneous()
 
-def load_and_test_final_model(checkpoint_path="checkpoints/best_model.pt"):
-    """
-    ONLY use this when you're completely done with experiments!
-    This loads your best model and evaluates it on the test set.
-    """
-    config = Config(**BASELINE_CONFIG)
-    return final_test_evaluation(checkpoint_path, config)
+def run_quick_hetero_debug():
+    """Run quick heterogeneous debug - call this in a Colab cell."""
+    return quick_hetero_test()
+
+def debug_hetero_batch():
+    """Debug heterogeneous data loading - call this in a Colab cell."""
+    return debug_hetero_data()

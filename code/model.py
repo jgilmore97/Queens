@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch_geometric.nn as pyg_nn
+from torch_geometric.nn import HeteroConv
 
 
 class GNN(nn.Module):
@@ -78,3 +79,107 @@ class GAT(nn.Module):
 
         logits = self.linear(x).squeeze(-1)
         return logits
+
+class HeteroGAT(nn.Module):
+    """
+    Heterogeneous Graph Attention Network for Queens puzzle.
+    
+    Uses different attention mechanisms for different constraint types:
+    - line_constraint: row/column mutual exclusion
+    - region_constraint: color region mutual exclusion  
+    - diagonal_constraint: immediate diagonal adjacency
+    """
+    def __init__(self, input_dim, hidden_dim, layer_count, dropout, heads=2):
+        super().__init__()
+        
+        # Each head outputs hidden_dim // heads channels; concatenated = hidden_dim
+        head_dim = hidden_dim // heads
+        assert hidden_dim % heads == 0, "hidden_dim must be divisible by heads"
+        
+        self.hidden_dim = hidden_dim
+        self.heads = heads
+        self.head_dim = head_dim
+        self.dropout_p = dropout
+        
+        # Define edge types we expect
+        self.edge_types = [
+            ('cell', 'line_constraint', 'cell'),
+            ('cell', 'region_constraint', 'cell'), 
+            ('cell', 'diagonal_constraint', 'cell')
+        ]
+        
+        # First heterogeneous layer
+        self.conv1 = HeteroConv({
+            edge_type: pyg_nn.GATConv(
+                in_channels=input_dim,
+                out_channels=head_dim,
+                heads=heads,
+                concat=True,
+                dropout=dropout,
+                add_self_loops=True,
+            )
+            for edge_type in self.edge_types
+        }, aggr='sum')
+
+        self.convs = nn.ModuleList()
+        for _ in range(1, layer_count):
+            hetero_conv = HeteroConv({
+                edge_type: pyg_nn.GATConv(
+                    in_channels=hidden_dim,
+                    out_channels=head_dim,
+                    heads=heads,
+                    concat=True,
+                    dropout=dropout,
+                    add_self_loops=True,
+                )
+                for edge_type in self.edge_types
+            }, aggr='sum')
+            self.convs.append(hetero_conv)
+    
+        self.relu = nn.LeakyReLU(0.2)
+        self.dropout = nn.Dropout(dropout)
+        
+        self.linear = nn.Linear(hidden_dim, 1)
+
+    def forward(self, x_dict, edge_index_dict):
+        """
+        Forward pass for heterogeneous data.
+        
+        Args:
+            x_dict: Dictionary with node features, e.g., {'cell': tensor}
+            edge_index_dict: Dictionary with edge indices for each edge type
+        """
+        
+        x_dict = self.conv1(x_dict, edge_index_dict)
+        
+        x_dict = {key: self.relu(x) for key, x in x_dict.items()}
+        x_dict = {key: self.dropout(x) for key, x in x_dict.items()}
+        
+        for conv in self.convs:
+            x_dict_new = conv(x_dict, edge_index_dict)
+            
+            x_dict = {
+                key: self.relu(x_dict[key] + x_dict_new[key]) 
+                for key in x_dict.keys()
+            }
+            x_dict = {key: self.dropout(x) for key, x in x_dict.items()}
+        
+        cell_features = x_dict['cell']
+        logits = self.linear(cell_features).squeeze(-1)
+        
+        return logits
+
+    def get_attention_weights(self, x_dict, edge_index_dict, layer_idx=0):
+        if layer_idx == 0:
+            conv_layer = self.conv1
+        elif layer_idx <= len(self.convs):
+            conv_layer = self.convs[layer_idx - 1]
+        else:
+            raise ValueError(f"Layer {layer_idx} doesn't exist")
+        
+        attention_weights = {}
+        
+        print(f"Attention extraction for layer {layer_idx} would go here")
+        print("Edge types:", list(edge_index_dict.keys()))
+        
+        return attention_weights
