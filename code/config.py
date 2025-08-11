@@ -18,8 +18,8 @@ class ModelConfig:
 @dataclass
 class TrainingConfig:
     """Training hyperparameters."""
-    epochs: int = 30
-    batch_size: int = 32
+    epochs: int = 7
+    batch_size: int = 512
     learning_rate: float = 1e-3
     weight_decay: float = 1e-5
     val_ratio: float = 0.10
@@ -103,9 +103,9 @@ class Config:
 # Example configurations for different experiment types
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "baseline_gat",
-        "tags": ["baseline", "gat"],
-        "notes": "Baseline GAT model with current architecture"
+        "experiment_name": "hetero_gat_add_batchnorm",
+        "tags": ["heteo", "gat", "batchnorm"],
+        "notes": "Baseline heterogeneous GAT with batch normalization"
     }
 }
 

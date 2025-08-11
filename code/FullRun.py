@@ -31,14 +31,14 @@ def main_heterogeneous_training():
     hetero_config = Config(**BASELINE_CONFIG)
     
     # Override specific settings
-    hetero_config.data.train_json = "10k_training_set_with_states.json"
-    hetero_config.data.test_json = "test_set_with_states.json"
-    hetero_config.training.epochs = 30
-    hetero_config.training.batch_size = 512
+    # hetero_config.data.train_json = "10k_training_set_with_states.json"
+    # hetero_config.data.test_json = "test_set_with_states.json"
+    # hetero_config.training.epochs = 30
+    # hetero_config.training.batch_size = 512
     
-    hetero_config.experiment.experiment_name = "hetero_gat_v1"
-    hetero_config.experiment.tags = ["heterogeneous", "gat", "focal_loss", "multi_constraint"]
-    hetero_config.experiment.notes = "Heterogeneous GAT with separate edge types for line/region/diagonal constraints"
+    # hetero_config.experiment.experiment_name = "hetero_gat_v1"
+    # hetero_config.experiment.tags = ["heterogeneous", "gat", "focal_loss", "multi_constraint"]
+    # hetero_config.experiment.notes = "Heterogeneous GAT with separate edge types for line/region/diagonal constraints"
     
     print("=== Queens Puzzle ML Training - HETEROGENEOUS ===")
     print(f"Device: {hetero_config.system.device}")
