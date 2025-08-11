@@ -82,14 +82,14 @@ class GAT(nn.Module):
 
 class HeteroGAT(nn.Module):
     """
-    Heterogeneous Graph Attention Network for Queens puzzle.
+    Heterogeneous Graph Attention Network for Queens puzzle with BatchNorm.
     
     Uses different attention mechanisms for different constraint types:
     - line_constraint: row/column mutual exclusion
     - region_constraint: color region mutual exclusion  
     - diagonal_constraint: immediate diagonal adjacency
     """
-    def __init__(self, input_dim, hidden_dim, layer_count, dropout, heads=2):
+    def __init__(self, input_dim, hidden_dim, layer_count, dropout, heads=2, use_batch_norm=True):
         super().__init__()
         
         # Each head outputs hidden_dim // heads channels; concatenated = hidden_dim
@@ -100,6 +100,7 @@ class HeteroGAT(nn.Module):
         self.heads = heads
         self.head_dim = head_dim
         self.dropout_p = dropout
+        self.use_batch_norm = use_batch_norm
         
         # Define edge types we expect
         self.edge_types = [
@@ -121,7 +122,13 @@ class HeteroGAT(nn.Module):
             for edge_type in self.edge_types
         }, aggr='sum')
 
+        # Batch normalization for first layer
+        if self.use_batch_norm:
+            self.bn1 = nn.BatchNorm1d(hidden_dim)
+
         self.convs = nn.ModuleList()
+        self.batch_norms = nn.ModuleList()
+        
         for _ in range(1, layer_count):
             hetero_conv = HeteroConv({
                 edge_type: pyg_nn.GATConv(
@@ -135,6 +142,10 @@ class HeteroGAT(nn.Module):
                 for edge_type in self.edge_types
             }, aggr='sum')
             self.convs.append(hetero_conv)
+            
+            # Add batch norm for each additional layer
+            if self.use_batch_norm:
+                self.batch_norms.append(nn.BatchNorm1d(hidden_dim))
     
         self.relu = nn.LeakyReLU(0.2)
         self.dropout = nn.Dropout(dropout)
@@ -143,7 +154,7 @@ class HeteroGAT(nn.Module):
 
     def forward(self, x_dict, edge_index_dict):
         """
-        Forward pass for heterogeneous data.
+        Forward pass for heterogeneous data with batch normalization.
         
         Args:
             x_dict: Dictionary with node features, e.g., {'cell': tensor}
@@ -152,11 +163,17 @@ class HeteroGAT(nn.Module):
         
         x_dict = self.conv1(x_dict, edge_index_dict)
         
+        if self.use_batch_norm:
+            x_dict = {key: self.bn1(x) for key, x in x_dict.items()}
+        
         x_dict = {key: self.relu(x) for key, x in x_dict.items()}
         x_dict = {key: self.dropout(x) for key, x in x_dict.items()}
         
-        for conv in self.convs:
+        for i, conv in enumerate(self.convs):
             x_dict_new = conv(x_dict, edge_index_dict)
+            
+            if self.use_batch_norm:
+                x_dict_new = {key: self.batch_norms[i](x) for key, x in x_dict_new.items()}
             
             x_dict = {
                 key: self.relu(x_dict[key] + x_dict_new[key]) 
