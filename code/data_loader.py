@@ -12,7 +12,7 @@ import torch
 from torch_geometric.data import Data, HeteroData, Dataset 
 from torch_geometric.loader import DataLoader
 
-def _build_heterogeneous_edge_index(region: np.ndarray) -> Dict[str, torch.Tensor]:
+def build_heterogeneous_edge_index(region: np.ndarray) -> Dict[str, torch.Tensor]:
     """Return dictionary of edge_index tensors for each constraint type."""
     n = region.shape[0]
     idx = np.arange(n * n, dtype=np.int64).reshape(n, n)
@@ -157,10 +157,11 @@ class QueensDataset(Dataset):
         # ------------------------------------------------------
         # 3) largest region count in the whole JSON → padding size
         # ------------------------------------------------------
-        self.max_regions = max(
-            int(np.max(r["region"])) + 1
-            for r in (train_set + val_set)
-        )
+        self.max_regions = 11
+        # max(
+        #     int(np.max(r["region"])) + 1
+        #     for r in (train_set + val_set)
+        # )
 
     # PyG Dataset hooks
     def len(self) -> int:  # noqa: D401
@@ -193,7 +194,7 @@ class QueensDataset(Dataset):
         y = torch.from_numpy(label.flatten().astype(np.int64))                     # (N²,)
 
         # --- heterogeneous edge_index ------------------------------------
-        hetero_edge_index = _build_heterogeneous_edge_index(region)
+        hetero_edge_index = build_heterogeneous_edge_index(region)
 
         # --- assemble HeteroData object ----------------------------------
         data = HeteroData()

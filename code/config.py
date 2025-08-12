@@ -57,7 +57,7 @@ class TrainingConfig:
 class DataConfig:
     """Data loading and processing configuration."""
     train_json: str = "10k_training_set_with_states.json"
-    test_json: str = "test_set_with_states.json"
+    test_json: str =  "test_set_with_states.json" #"FinalTestOfficialPuzzles.json" -use for small set of never mutated official LI boards
     num_workers: int = 0 if _detect_notebook_environment() else 4  # Auto-detect and disable for notebooks
     pin_memory: bool = True
     shuffle_train: bool = True
