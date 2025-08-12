@@ -521,22 +521,33 @@ KEY INSIGHTS
     return str(report_path)
 
 def run_evaluation(model_path: str, config: Config, use_heterogeneous: bool = True, 
-                  output_dir: str = "evaluation_results"):
+                  output_dir: str = "evaluation_results", test = False):
     """Run complete evaluation pipeline."""
     print("Starting model evaluation...")
     
     # Load model
     model = load_model(model_path, config, use_heterogeneous)
     
-    # Load validation data
-    _, val_loader = get_queens_loaders(
-        config.data.train_json,
-        batch_size=512,
-        val_ratio=config.training.val_ratio,
-        seed=config.data.seed,
-        num_workers=2,
-        shuffle_train=False
-    )
+    if not test:
+        # Load validation data
+        _, val_loader = get_queens_loaders(
+            config.data.train_json,
+            batch_size=512,
+            val_ratio=config.training.val_ratio,
+            seed=config.data.seed,
+            num_workers=2,
+            shuffle_train=False
+        )
+    else:
+        # Load test data
+        _, val_loader = get_queens_loaders(
+            config.data.test_json,
+            batch_size=512,
+            val_ratio= 1.0,
+            seed=config.data.seed,
+            num_workers=2,
+            shuffle_train=False
+        )
     
     # Run predictions
     results = run_predictions(model, val_loader, use_heterogeneous, config.system.device)
