@@ -1,13 +1,33 @@
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 import torch
+import os
+
+def _detect_notebook_environment():
+    """Detect if running in a notebook environment where multiprocessing can be problematic."""
+    try:
+        # Check for common notebook indicators
+        if 'COLAB_GPU' in os.environ:
+            return True
+        if 'JPY_PARENT_PID' in os.environ:
+            return True
+        # Check if IPython is available and we're in a notebook
+        try:
+            from IPython import get_ipython
+            if get_ipython() is not None:
+                return 'google.colab' in str(get_ipython())
+        except ImportError:
+            pass
+    except:
+        pass
+    return False
 
 @dataclass
 class ModelConfig:
     """Model architecture configuration."""
     input_dim: int = 14
     hidden_dim: int = 256
-    layer_count: int = 3
+    layer_count: int = 4
     dropout: float = 0.2
     heads: int = 2
     model_type: str = "GAT"  # "GAT", "HeteroGAT", or "GNN"
@@ -18,7 +38,7 @@ class ModelConfig:
 @dataclass
 class TrainingConfig:
     """Training hyperparameters."""
-    epochs: int = 7
+    epochs: int = 12
     batch_size: int = 512
     learning_rate: float = 1e-3
     weight_decay: float = 1e-5
@@ -38,7 +58,7 @@ class DataConfig:
     """Data loading and processing configuration."""
     train_json: str = "10k_training_set_with_states.json"
     test_json: str = "test_set_with_states.json"
-    num_workers: int = 4
+    num_workers: int = 0 if _detect_notebook_environment() else 4  # Auto-detect and disable for notebooks
     pin_memory: bool = True
     shuffle_train: bool = True
     seed: int = 42
@@ -80,6 +100,12 @@ class Config:
         
         # Override with any provided kwargs
         self.update_from_dict(kwargs)
+        
+        # Print multiprocessing status for debugging
+        if self.data.num_workers == 0:
+            print("ℹ️  DataLoader multiprocessing disabled (prevents worker shutdown errors)")
+        else:
+            print(f"ℹ️  DataLoader using {self.data.num_workers} worker processes")
     
     def update_from_dict(self, config_dict: Dict[str, Any]):
         """Update configuration from dictionary."""
