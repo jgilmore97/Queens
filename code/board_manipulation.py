@@ -637,7 +637,7 @@ def save_state_dataset_to_json(dataset, filename="queens_training_data.json"):
 # save_dataset_to_json(all_training_data, "augmented_queens_data.json")
 
 # Below function visualizes a single training example with queens overlaid on the board.
-def visualize_queens_board_with_queens(example: dict, title: str = "Queens Board with Queens") -> None:
+def visualize_queens_board_with_queens(example: dict, title: str = "Queens Board with Queens", show_labels = False) -> None:
     """
     Visualize a single training example from the dataset with queens overlaid.
 
@@ -646,7 +646,10 @@ def visualize_queens_board_with_queens(example: dict, title: str = "Queens Board
         title (str): Optional title for the plot.
     """
     region_board = np.array(example['region'])
-    queen_board = np.array(example['partial_board'])
+    if not show_labels:
+        queen_board = np.array(example['partial_board'])
+    else:
+        queen_board = np.array(example['label_board'])
     n = region_board.shape[0]
 
     assert region_board.shape == queen_board.shape, "Board shape mismatch."
