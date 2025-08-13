@@ -13,12 +13,11 @@ class SolveResult:
     """Results from solving a queens puzzle."""
     success: bool
     solution: Optional[np.ndarray]  # Board with 1s where queens are placed
-    queen_positions: Optional[List[Tuple[int, int]]]  # List of (row, col) positions
+    queen_positions: Optional[List[Tuple[int, int]]]
     steps_taken: int
     backtracks: int
     solve_time: float
-    decision_log: List[Dict]  # Log of model decisions at each step
-
+    decision_log: List[Dict]
 
 class ModelEnabledQueensSolver:
     """
@@ -35,11 +34,10 @@ class ModelEnabledQueensSolver:
         """
         self.model = model
         self.device = device
-        self.max_regions = 11  # Fixed size for one-hot encoding
-        self.top_k_candidates = 5  # Try top-5 positions per step
-        self.early_termination_threshold = -10.0  # Logit threshold for early termination
-        
-        # Put model in eval mode
+        self.max_regions = 11 
+        self.top_k_candidates = 5 
+        self.early_termination_threshold = -10.0  
+
         self.model.eval()
         
         # Tracking for current solve
@@ -72,7 +70,7 @@ class ModelEnabledQueensSolver:
         self.backtracks = 0
         self.decision_log = []
         
-        # Build edge index once (static for this puzzle)
+        # Build edge index once
         edge_index_dict = self._build_edge_index(region_board)
         
         if verbose:
@@ -193,7 +191,6 @@ class ModelEnabledQueensSolver:
         """Build heterogeneous edge index for the puzzle (done once)."""
         edge_index_dict = build_heterogeneous_edge_index(region_board)
         
-        # Move to device
         for edge_type, edge_index in edge_index_dict.items():
             edge_index_dict[edge_type] = edge_index.to(self.device)
         
@@ -233,7 +230,7 @@ class ModelEnabledQueensSolver:
             logit_value = logits_np[row, col]
             legal_positions.append(((row, col), logit_value))
         
-        return legal_positions  # Already sorted by logit from model predictions
+        return legal_positions
     
     def _get_model_predictions(self, region_board: np.ndarray, queen_board: np.ndarray, 
                              edge_index_dict: Dict) -> Tuple[List[Tuple[int, int]], torch.Tensor, float]:
@@ -282,10 +279,10 @@ class ModelEnabledQueensSolver:
         n = region_board.shape[0]
         N2 = n * n
         
-        # 1. Scaled coordinates (same as training)
+        # 1. Scaled coordinates
         coords = np.indices((n, n)).reshape(2, -1).T.astype(np.float32) / (n - 1)  # (N², 2)
         
-        # 2. One-hot region encoding (fixed to size 11)
+        # 2. One-hot region encoding
         reg_onehot = np.zeros((N2, self.max_regions), dtype=np.float32)
         flat_ids = region_board.flatten()
         reg_onehot[np.arange(N2), flat_ids] = 1.0  # (N², 11)
@@ -614,11 +611,7 @@ def compare_solvers(region_board, ml_solver=None, verbose=False):
     ml_result = None
     if ml_solver is not None:
         print("\n🤖 Running ML-enabled solver...")
-        # Note: This assumes the ML solver expects a expected_solution parameter
-        # You may need to adjust this based on your actual implementation
         try:
-            # For comparison, we'll create a dummy label board (all zeros)
-            # In practice, you'd want the actual solution for the ML solver
             expected_solution = np.zeros_like(region_board)
             ml_result = ml_solver.solve_puzzle(region_board, expected_solution, verbose=verbose)
         except Exception as e:
