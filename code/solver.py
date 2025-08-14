@@ -1,8 +1,9 @@
 import torch
 import numpy as np
-from typing import Tuple, List, Optional, Dict
+from typing import Tuple, List, Optional, Dict, Set
 import time
 from dataclasses import dataclass
+from collections import defaultdict
 
 from model import HeteroGAT
 from data_loader import build_heterogeneous_edge_index
@@ -19,9 +20,10 @@ class SolveResult:
     solve_time: float
     decision_log: List[Dict]
 
+
 class ModelEnabledQueensSolver:
     """
-    Queens puzzle solver that uses a trained GNN model to guide placement decisions.
+    Enhanced Queens puzzle solver with smart backtracking and cycle detection.
     """
     
     def __init__(self, model: HeteroGAT, device: str = "cuda"):
@@ -35,22 +37,32 @@ class ModelEnabledQueensSolver:
         self.model = model
         self.device = device
         self.max_regions = 11 
-        self.top_k_candidates = 5 
+        
+        # Enhanced backtracking parameters
+        self.min_top_k = 3  # Always try at least this many candidates
+        self.max_top_k = 6  # Never try more than this many
         self.early_termination_threshold = -10.0  
 
         self.model.eval()
         
-        # Tracking for current solve
+        # Reset for each puzzle
+        self._reset_tracking()
+        
+    def _reset_tracking(self):
+        """Reset tracking variables for a new puzzle."""
         self.steps_taken = 0
         self.backtracks = 0
         self.decision_log = []
+        self.visited_states = set()  # Track seen board states
+        self.failed_moves = defaultdict(set)  # state_hash -> set of failed moves
         
     def solve_puzzle(self, region_board: np.ndarray, expected_solution: np.ndarray, verbose: bool = False) -> SolveResult:
         """
-        Solve a queens puzzle using model guidance with backtracking.
+        Solve a queens puzzle using enhanced model guidance with smart backtracking.
         
         Args:
             region_board: n×n numpy array with integer region IDs
+            expected_solution: Known solution for verification
             verbose: Whether to print step-by-step progress
             
         Returns:
@@ -65,28 +77,30 @@ class ModelEnabledQueensSolver:
         used_columns = set()
         used_regions = set()
         
-        # Reset tracking
-        self.steps_taken = 0
-        self.backtracks = 0
-        self.decision_log = []
+        # Reset tracking for this puzzle
+        self._reset_tracking()
         
         # Build edge index once
         edge_index_dict = self._build_edge_index(region_board)
         
         if verbose:
             print(f"Solving {n}×{n} puzzle with {len(np.unique(region_board))} regions")
+            print("Enhanced solver: cycle detection + failed move memoization + dynamic top-k")
         
         # Start recursive solving
         success = self._solve_recursive(
             region_board, expected_solution, queen_board, placed_queens,
-            used_columns, used_regions, edge_index_dict, verbose
+            used_columns, used_regions, edge_index_dict, verbose, current_depth=0
         )
         
         solve_time = time.time() - start_time
         
         if success:
             if verbose:
-                print(f"\n✅ Puzzle solved in {solve_time:.3f}s with {self.steps_taken} steps and {self.backtracks} backtracks")
+                print(f"\n✅ Enhanced solver succeeded in {solve_time:.3f}s")
+                print(f"Steps: {self.steps_taken}, Backtracks: {self.backtracks}")
+                print(f"States explored: {len(self.visited_states)}")
+                print(f"Failed moves cached: {sum(len(moves) for moves in self.failed_moves.values())}")
             
             return SolveResult(
                 success=True,
@@ -99,7 +113,8 @@ class ModelEnabledQueensSolver:
             )
         else:
             if verbose:
-                print(f"\n❌ Puzzle failed after {solve_time:.3f}s with {self.steps_taken} steps and {self.backtracks} backtracks")
+                print(f"\n❌ Enhanced solver failed after {solve_time:.3f}s")
+                print(f"Steps: {self.steps_taken}, Backtracks: {self.backtracks}")
             
             return SolveResult(
                 success=False,
@@ -113,45 +128,84 @@ class ModelEnabledQueensSolver:
     
     def _solve_recursive(self, region_board: np.ndarray, expected_solution: np.ndarray, queen_board: np.ndarray, 
                         placed_queens: List[Tuple[int, int]], used_columns: set, 
-                        used_regions: set, edge_index_dict: Dict, verbose: bool) -> bool:
+                        used_regions: set, edge_index_dict: Dict, verbose: bool, current_depth: int = 0) -> bool:
         """
-        Recursive solving function with backtracking.
+        Enhanced recursive solving function with smart backtracking.
         
         Returns:
             True if solution found, False if this path failed
         """
         n = region_board.shape[0]
+        max_depth = n * 20  # Reasonable depth limit
         
-        # Base case: queens_board == expected_solution
+        # Base case: solution found
         if np.array_equal(queen_board, expected_solution):
             return True
         
+        # Depth limiting
+        if current_depth > max_depth:
+            if verbose:
+                print(f"Depth limit {max_depth} reached, terminating")
+            return False
+        
+        # Adaptive early termination based on progress
+        progress_ratio = len(placed_queens) / n
+        if current_depth > n * 5 and progress_ratio < 0.5:
+            if verbose:
+                print(f"Poor progress at depth {current_depth} (progress: {progress_ratio:.1%}), terminating")
+            return False
+        
+        # Cycle detection
+        state_hash = self._hash_board_state(queen_board)
+        if state_hash in self.visited_states:
+            if verbose:
+                print(f"Cycle detected at step {self.steps_taken}, skipping")
+            return False
+        
+        self.visited_states.add(state_hash)
         self.steps_taken += 1
         
-        # Get model predictions for current state
-        legal_positions = self._get_legal_positions(
+        # Get legal positions with enhanced validation
+        legal_positions = self._get_legal_positions_enhanced(
             region_board, queen_board, edge_index_dict, 
-            used_columns, used_regions, placed_queens
+            used_columns, used_regions, placed_queens, verbose
         )
         
-        # Early termination: no legal moves or all logits too low
-        if not legal_positions:
+        # Filter out previously failed moves from this state
+        filtered_positions = [
+            (pos, logit) for pos, logit in legal_positions 
+            if pos not in self.failed_moves[state_hash]
+        ]
+        
+        # Check for unsolvable state - critical for multi-level backtracking
+        if self._is_state_unsolvable(filtered_positions, n, placed_queens):
             if verbose:
-                print(f"No legal positions at step {self.steps_taken}")
+                print(f"UNSOLVABLE STATE detected at step {self.steps_taken}: No legal moves, {len(placed_queens)}/{n} queens placed")
+                print(f"This will trigger multi-level backtracking to find alternative paths")
+            self.visited_states.remove(state_hash)  # Allow revisiting from other paths
             return False
         
-        max_logit = max(logit for _, logit in legal_positions)
-        if max_logit < self.early_termination_threshold:
+        if not filtered_positions:
             if verbose:
-                print(f"Early termination: max logit {max_logit:.3f} < {self.early_termination_threshold}")
+                print(f"No untried legal positions at step {self.steps_taken}")
+            self.visited_states.remove(state_hash)  # Allow revisiting from other paths
             return False
         
-        # Try top-k candidates
-        candidates_to_try = legal_positions[:self.top_k_candidates]
+        # Dynamic top-k selection
+        candidates_to_try = self._get_dynamic_top_k(filtered_positions)
         
+        # Early termination: all remaining logits too low
+        if candidates_to_try and candidates_to_try[0][1] < self.early_termination_threshold:
+            if verbose:
+                print(f"Early termination: best logit {candidates_to_try[0][1]:.3f} < {self.early_termination_threshold}")
+            self.visited_states.remove(state_hash)
+            return False
+        
+        # Try candidates in order
         for i, ((row, col), logit) in enumerate(candidates_to_try):
             if verbose:
-                print(f"Step {self.steps_taken}: Trying position ({row}, {col}) with logit {logit:.3f} (option {i+1}/{len(candidates_to_try)})")
+                print(f"Step {self.steps_taken}: Trying position ({row}, {col}) with logit {logit:.3f} " +
+                      f"(option {i+1}/{len(candidates_to_try)}, depth {current_depth})")
             
             # Place queen
             queen_board[row, col] = 1
@@ -159,33 +213,102 @@ class ModelEnabledQueensSolver:
             used_columns.add(col)
             used_regions.add(region_board[row, col])
             
-            # Log this decision
+            # Log decision
             self.decision_log.append({
                 'step': self.steps_taken,
                 'position': (row, col),
                 'logit': float(logit),
                 'num_legal_options': len(legal_positions),
+                'num_filtered_options': len(filtered_positions),
                 'candidate_rank': i + 1,
-                'region': int(region_board[row, col])
+                'region': int(region_board[row, col]),
+                'depth': current_depth
             })
             
             # Recurse
             if self._solve_recursive(region_board, expected_solution, queen_board, placed_queens, 
-                                   used_columns, used_regions, edge_index_dict, verbose):
+                                   used_columns, used_regions, edge_index_dict, verbose, current_depth + 1):
                 return True  # Found solution in this path
             
             # Backtrack: remove queen and restore state
             if verbose:
-                print(f"Backtracking from ({row}, {col})")
+                print(f"Backtracking from ({row}, {col}) at depth {current_depth}")
             
             self.backtracks += 1
             queen_board[row, col] = 0
             placed_queens.pop()
             used_columns.remove(col)
             used_regions.remove(region_board[row, col])
+            
+            # Mark this move as failed from this state
+            self.failed_moves[state_hash].add((row, col))
         
-        # All candidates failed
+        # All candidates failed - remove from visited states to allow different approach
+        self.visited_states.remove(state_hash)
         return False
+    
+    def _hash_board_state(self, queen_board: np.ndarray) -> int:
+        """Create unique hash for current queen placement."""
+        return hash(queen_board.tobytes())
+    
+    def _get_dynamic_top_k(self, legal_positions: List[Tuple[Tuple[int, int], float]]) -> List[Tuple[Tuple[int, int], float]]:
+        """
+        Dynamically determine how many candidates to try based on confidence.
+        
+        Args:
+            legal_positions: List of ((row, col), logit) tuples sorted by logit
+            
+        Returns:
+            Filtered list of candidates to try
+        """
+        if not legal_positions:
+            return []
+        
+        top_logit = legal_positions[0][1]
+        
+        # High confidence: try fewer candidates
+        if top_logit > 1.0:
+            num_candidates = min(6, len(legal_positions))
+        else:
+            num_candidates = min(self.max_top_k, len(legal_positions))
+        
+        # Always try at least min_top_k if available
+        num_candidates = max(self.min_top_k, num_candidates)
+        num_candidates = min(num_candidates, len(legal_positions))
+        
+        return legal_positions[:num_candidates]
+    
+    def _validate_queen_placement(self, row: int, col: int, region_board: np.ndarray, 
+                                 queen_board: np.ndarray, used_columns: set, used_regions: set, 
+                                 placed_queens: List[Tuple[int, int]], verbose: bool = False) -> Tuple[bool, List[str]]:
+        """
+        Comprehensive constraint validation with detailed violation tracking.
+        
+        Returns:
+            (is_valid, list_of_violations)
+        """
+        violations = []
+        
+        # Column constraint
+        if col in used_columns:
+            violations.append(f"column_{col}_occupied")
+        
+        # Region constraint  
+        region_id = region_board[row, col]
+        if region_id in used_regions:
+            violations.append(f"region_{region_id}_occupied")
+        
+        # Diagonal constraint - check all existing queens
+        for q_row, q_col in placed_queens:
+            if abs(row - q_row) == 1 and abs(col - q_col) == 1:
+                violations.append(f"diagonal_conflict_with_({q_row},{q_col})")
+        
+        is_valid = len(violations) == 0
+        
+        if not is_valid and verbose:
+            print(f"    Invalid ({row},{col}): {', '.join(violations)}")
+        
+        return is_valid, violations
     
     def _build_edge_index(self, region_board: np.ndarray) -> Dict[str, torch.Tensor]:
         """Build heterogeneous edge index for the puzzle (done once)."""
@@ -196,11 +319,11 @@ class ModelEnabledQueensSolver:
         
         return edge_index_dict
     
-    def _get_legal_positions(self, region_board: np.ndarray, queen_board: np.ndarray, 
-                           edge_index_dict: Dict, used_columns: set, used_regions: set, 
-                           placed_queens: List[Tuple[int, int]]) -> List[Tuple[Tuple[int, int], float]]:
+    def _get_legal_positions_enhanced(self, region_board: np.ndarray, queen_board: np.ndarray, 
+                                    edge_index_dict: Dict, used_columns: set, used_regions: set, 
+                                    placed_queens: List[Tuple[int, int]], verbose: bool = False) -> List[Tuple[Tuple[int, int], float]]:
         """
-        Get legal positions sorted by model confidence (highest logit first).
+        Get legal positions with enhanced validation and model predictions.
         
         Returns:
             List of ((row, col), logit) tuples sorted by logit (highest first)
@@ -210,25 +333,19 @@ class ModelEnabledQueensSolver:
             region_board, queen_board, edge_index_dict
         )
         
-        # Filter to legal positions
+        # Enhanced validation with detailed logging
         n = region_board.shape[0]
         logits_np = logits.cpu().numpy().reshape(n, n)
         legal_positions = []
         
         for row, col in positions_by_logit:
-            # Check constraints
-            if col in used_columns:
-                continue
-            if region_board[row, col] in used_regions:
-                continue
+            is_valid, violations = self._validate_queen_placement(
+                row, col, region_board, queen_board, used_columns, used_regions, placed_queens, verbose
+            )
             
-            # Check diagonal adjacency to existing queens
-            if self._has_diagonal_conflict(row, col, placed_queens):
-                continue
-            
-            # Valid position - add with its logit
-            logit_value = logits_np[row, col]
-            legal_positions.append(((row, col), logit_value))
+            if is_valid:
+                logit_value = logits_np[row, col]
+                legal_positions.append(((row, col), logit_value))
         
         return legal_positions
     
@@ -295,6 +412,32 @@ class ModelEnabledQueensSolver:
         
         return torch.from_numpy(features)
     
+    def _is_state_unsolvable(self, legal_positions: List[Tuple[Tuple[int, int], float]], 
+                            n: int, placed_queens: List[Tuple[int, int]]) -> bool:
+        """
+        Detect if current state cannot possibly lead to a solution.
+        
+        This is critical for multi-level backtracking - when we detect an unsolvable state,
+        returning False will cause the recursive backtracking to continue up the tree
+        until it finds a state with unexplored options.
+        
+        Args:
+            legal_positions: Available legal moves from current state
+            n: Board size (total queens needed)
+            placed_queens: Queens already placed
+            
+        Returns:
+            True if state is unsolvable (triggers multi-level backtracking)
+        """
+        queens_placed = len(placed_queens)
+        queens_remaining = n - queens_placed
+        
+        # If no legal moves exist and we haven't placed all queens, state is unsolvable
+        if len(legal_positions) == 0 and queens_remaining > 0:
+            return True
+            
+        return False
+    
     def _has_diagonal_conflict(self, row: int, col: int, placed_queens: List[Tuple[int, int]]) -> bool:
         """Check if position conflicts diagonally with any placed queen."""
         for q_row, q_col in placed_queens:
@@ -306,14 +449,14 @@ class ModelEnabledQueensSolver:
 
 def load_solver(model_path: str, device: str = "cuda") -> ModelEnabledQueensSolver:
     """
-    Load a trained model and create a solver.
+    Load a trained model and create an enhanced solver.
     
     Args:
         model_path: Path to saved model checkpoint
         device: Device to run on
         
     Returns:
-        Initialized solver
+        Initialized enhanced solver
     """
     # Load checkpoint
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
@@ -332,7 +475,7 @@ def load_solver(model_path: str, device: str = "cuda") -> ModelEnabledQueensSolv
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to(device)
     
-    print(f"Loaded model from epoch {checkpoint['epoch']}")
+    print(f"Loaded enhanced solver with model from epoch {checkpoint['epoch']}")
     print(f"Model config: {model_config}")
     
     return ModelEnabledQueensSolver(model, device)
@@ -341,15 +484,15 @@ def load_solver(model_path: str, device: str = "cuda") -> ModelEnabledQueensSolv
 def test_solver_on_puzzle(solver: ModelEnabledQueensSolver, region_board: np.ndarray,
                          expected_solution: Optional[np.ndarray] = None, verbose: bool = True):
     """
-    Test solver on a specific puzzle and print results.
+    Test enhanced solver on a specific puzzle and print results.
     
     Args:
-        solver: Initialized solver
+        solver: Initialized enhanced solver
         region_board: Puzzle to solve
         expected_solution: Known solution for verification (optional)
         verbose: Whether to print detailed progress
     """
-    print(f"Testing solver on {region_board.shape[0]}×{region_board.shape[0]} puzzle")
+    print(f"Testing enhanced solver on {region_board.shape[0]}×{region_board.shape[0]} puzzle")
     print(f"Regions: {sorted(np.unique(region_board))}")
     
     # Solve puzzle
@@ -357,12 +500,13 @@ def test_solver_on_puzzle(solver: ModelEnabledQueensSolver, region_board: np.nda
     
     # Print results
     print(f"\n{'='*50}")
-    print(f"SOLVE RESULT")
+    print(f"ENHANCED SOLVE RESULT")
     print(f"{'='*50}")
     print(f"Success: {result.success}")
     print(f"Time: {result.solve_time:.3f}s")
     print(f"Steps: {result.steps_taken}")
     print(f"Backtracks: {result.backtracks}")
+    print(f"Efficiency: {result.backtracks/result.steps_taken:.1%} backtrack rate" if result.steps_taken > 0 else "No steps taken")
     
     if result.success:
         print(f"Queen positions: {result.queen_positions}")
@@ -379,13 +523,6 @@ def test_solver_on_puzzle(solver: ModelEnabledQueensSolver, region_board: np.nda
         if expected_solution is not None:
             matches_expected = np.array_equal(result.solution, expected_solution)
             print(f"Matches expected solution: {matches_expected}")
-    
-    # Print decision log summary
-    print(f"\nDecision log summary:")
-    print(f"Total decisions logged: {len(result.decision_log)}")
-    if result.decision_log:
-        successful_decisions = [d for d in result.decision_log if d['candidate_rank'] == 1]
-        print(f"First-choice successes: {len(successful_decisions)}/{len(result.decision_log)}")
     
     return result
 
@@ -430,7 +567,6 @@ def verify_solution(region_board: np.ndarray, solution_board: np.ndarray) -> boo
                 return False
     
     return True
-
 
 # ------------------------------------------------------------------------------
 @dataclass

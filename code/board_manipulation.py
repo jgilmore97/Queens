@@ -17,6 +17,7 @@ import matplotlib.colors as colors
 import os
 import time
 from tqdm import tqdm
+from typing import List, Tuple, Set, Dict
 
 # Function to detect grid size by counting transitions from non-black to black pixels along a line of pixels (counts black lines to detect grid size)
 def detect_grid_size_by_black_lines(
@@ -675,3 +676,383 @@ def visualize_queens_board_with_queens(example: dict, title: str = "Queens Board
     ax.tick_params(which='both', bottom=False, left=False, labelbottom=False, labelleft=False)
     ax.set_title(title)
     plt.show()
+
+#--------------------------------------------------------------------------------------------------------------------------------------------
+#Building out more robust labels using stronger heuristic solvers
+
+def find_single_cell_regions(region_board: np.ndarray, used_regions: Set[int]) -> List[Tuple[int, int]]:
+    """
+    Find all regions that contain exactly one cell and haven't been used yet.
+    
+    Args:
+        region_board: nxn array with region IDs
+        used_regions: Set of region IDs that already have queens placed
+        
+    Returns:
+        List of (row, col) positions that are forced moves (single cell regions)
+    """
+    forced_moves = []
+    unique_regions = np.unique(region_board)
+    
+    for region_id in unique_regions:
+        if region_id in used_regions:
+            continue
+            
+        region_positions = np.argwhere(region_board == region_id)
+        if len(region_positions) == 1:
+            row, col = region_positions[0]
+            forced_moves.append((row, col))
+    
+    return forced_moves
+
+def find_full_coverage_intersections(region_board: np.ndarray, used_regions: Set[int]) -> List[Tuple[int, int]]:
+    """
+    Find regions that span a full row AND full column (intersection must have queen).
+    
+    Args:
+        region_board: nxn array with region IDs
+        used_regions: Set of region IDs that already have queens placed
+        
+    Returns:
+        List of (row, col) positions that are forced moves (row/column intersections)
+    """
+    n = region_board.shape[0]
+    forced_moves = []
+    unique_regions = np.unique(region_board)
+    
+    for region_id in unique_regions:
+        if region_id in used_regions:
+            continue
+            
+        region_positions = np.argwhere(region_board == region_id)
+        
+        # Get unique rows and columns for this region
+        rows = set(pos[0] for pos in region_positions)
+        cols = set(pos[1] for pos in region_positions)
+        
+        # Check if region spans full row AND full column
+        spans_full_row = any(len([pos for pos in region_positions if pos[0] == row]) == n for row in rows)
+        spans_full_col = any(len([pos for pos in region_positions if pos[1] == col]) == n for col in cols)
+        
+        if spans_full_row and spans_full_col:
+            # Find intersection points - cells that are in both the full row and full column
+            for row in rows:
+                for col in cols:
+                    # Check if this row spans full width and this col spans full height
+                    row_cells = [pos for pos in region_positions if pos[0] == row]
+                    col_cells = [pos for pos in region_positions if pos[1] == col]
+                    
+                    if len(row_cells) == n and len(col_cells) == n:
+                        # This is an intersection point
+                        if (row, col) in [(pos[0], pos[1]) for pos in region_positions]:
+                            forced_moves.append((row, col))
+    
+    return forced_moves
+
+def apply_row_column_constraints(region_board: np.ndarray, used_regions: Set[int]) -> np.ndarray:
+    """
+    Create constraint mask based on regions that span only a single row or single column.
+    
+    Args:
+        region_board: nxn array with region IDs
+        used_regions: Set of region IDs that already have queens placed
+        
+    Returns:
+        Boolean mask where True = cell is blocked by row/column constraints
+    """
+    n = region_board.shape[0]
+    constraint_mask = np.zeros((n, n), dtype=bool)
+    unique_regions = np.unique(region_board)
+    
+    for region_id in unique_regions:
+        if region_id in used_regions:
+            continue
+            
+        region_positions = np.argwhere(region_board == region_id)
+        
+        # Get unique rows and columns for this region
+        rows = set(pos[0] for pos in region_positions)
+        cols = set(pos[1] for pos in region_positions)
+        
+        # Case 1: Region spans only one row (but multiple columns)
+        if len(rows) == 1 and len(cols) > 1:
+            row = list(rows)[0]
+            # Block all other cells in this row (except the region cells)
+            for col in range(n):
+                if region_board[row, col] != region_id:
+                    constraint_mask[row, col] = True
+        
+        # Case 2: Region spans only one column (but multiple rows)
+        if len(cols) == 1 and len(rows) > 1:
+            col = list(cols)[0]
+            # Block all other cells in this column (except the region cells)
+            for row in range(n):
+                if region_board[row, col] != region_id:
+                    constraint_mask[row, col] = True
+    
+    return constraint_mask
+
+def create_constraint_mask(region_board: np.ndarray, placed_queens: List[Tuple[int, int]]) -> np.ndarray:
+    """
+    Create comprehensive constraint mask based on already placed queens.
+    
+    Args:
+        region_board: nxn array with region IDs
+        placed_queens: List of (row, col) positions where queens are already placed
+        
+    Returns:
+        Boolean mask where True = cell is blocked by existing queen constraints
+    """
+    n = region_board.shape[0]
+    constraint_mask = np.zeros((n, n), dtype=bool)
+    
+    for queen_row, queen_col in placed_queens:
+        queen_region = region_board[queen_row, queen_col]
+        
+        # Block same row
+        constraint_mask[queen_row, :] = True
+        
+        # Block same column
+        constraint_mask[:, queen_col] = True
+        
+        # Block same region
+        constraint_mask[region_board == queen_region] = True
+        
+        # Block diagonal adjacency (immediate neighbors only)
+        for dr in [-1, 0, 1]:
+            for dc in [-1, 0, 1]:
+                if abs(dr) == 1 and abs(dc) == 1:  # Only diagonal neighbors
+                    new_row, new_col = queen_row + dr, queen_col + dc
+                    if 0 <= new_row < n and 0 <= new_col < n:
+                        constraint_mask[new_row, new_col] = True
+    
+    return constraint_mask
+
+def find_newly_forced_moves(region_board: np.ndarray, constraint_mask: np.ndarray, used_regions: Set[int]) -> List[Tuple[int, int]]:
+    """
+    Find regions that now have only one valid (non-blocked) cell remaining.
+    
+    Args:
+        region_board: nxn array with region IDs
+        constraint_mask: Boolean mask where True = cell is blocked
+        used_regions: Set of region IDs that already have queens placed
+        
+    Returns:
+        List of (row, col) positions that are newly forced moves
+    """
+    forced_moves = []
+    unique_regions = np.unique(region_board)
+    
+    for region_id in unique_regions:
+        if region_id in used_regions:
+            continue
+            
+        # Find all cells in this region
+        region_mask = (region_board == region_id)
+        
+        # Find valid (non-blocked) cells in this region
+        valid_cells = region_mask & (~constraint_mask)
+        valid_positions = np.argwhere(valid_cells)
+        
+        # If exactly one valid cell remains, it's a forced move
+        if len(valid_positions) == 1:
+            row, col = valid_positions[0]
+            forced_moves.append((row, col))
+    
+    return forced_moves
+
+def detect_forced_moves(region_board: np.ndarray, current_queen_mask: np.ndarray, 
+                       used_columns: Set[int], used_regions: Set[int]) -> List[Tuple[int, int]]:
+    """
+    Main function to detect all forced moves using iterative constraint propagation.
+    
+    Args:
+        region_board: nxn array with region IDs
+        current_queen_mask: nxn binary array showing currently placed queens
+        used_columns: Set of column indices already used
+        used_regions: Set of region IDs already used
+        
+    Returns:
+        List of (row, col) positions that are forced moves, in priority order
+    """
+    # Get list of currently placed queens
+    placed_queens = [(row, col) for row, col in zip(*np.where(current_queen_mask == 1))]
+    
+    all_forced_moves = []
+    iteration = 0
+    max_iterations = region_board.shape[0]  # Prevent infinite loops
+    
+    # Create working copies to track state during iteration
+    working_used_regions = used_regions.copy()
+    working_placed_queens = placed_queens.copy()
+    
+    while iteration < max_iterations:
+        iteration_forced_moves = []
+        
+        # Step 1: Find single cell regions
+        single_cell_moves = find_single_cell_regions(region_board, working_used_regions)
+        iteration_forced_moves.extend(single_cell_moves)
+        
+        # Step 2: Find full coverage intersections
+        intersection_moves = find_full_coverage_intersections(region_board, working_used_regions)
+        iteration_forced_moves.extend(intersection_moves)
+        
+        # Step 3: Apply row/column constraints and find newly forced moves
+        base_constraint_mask = create_constraint_mask(region_board, working_placed_queens)
+        row_col_constraint_mask = apply_row_column_constraints(region_board, working_used_regions)
+        combined_constraint_mask = base_constraint_mask | row_col_constraint_mask
+        
+        newly_forced_moves = find_newly_forced_moves(region_board, combined_constraint_mask, working_used_regions)
+        iteration_forced_moves.extend(newly_forced_moves)
+        
+        # Remove duplicates while preserving order
+        unique_iteration_moves = []
+        for move in iteration_forced_moves:
+            if move not in unique_iteration_moves and move not in all_forced_moves:
+                unique_iteration_moves.append(move)
+        
+        # If no new forced moves found, we're done
+        if not unique_iteration_moves:
+            break
+        
+        # Add to overall list
+        all_forced_moves.extend(unique_iteration_moves)
+        
+        # Update working state for next iteration
+        for row, col in unique_iteration_moves:
+            working_placed_queens.append((row, col))
+            working_used_regions.add(region_board[row, col])
+        
+        iteration += 1
+    
+    return all_forced_moves
+
+def build_priority_labels(region_board: np.ndarray, constraint_mask: np.ndarray, 
+                         forced_moves: List[Tuple[int, int]], used_regions: Set[int]) -> np.ndarray:
+    """
+    Build label array based on priority system: forced moves first, then all valid remaining.
+    
+    Args:
+        region_board: nxn array with region IDs
+        constraint_mask: Boolean mask where True = cell is blocked
+        forced_moves: List of (row, col) positions that are forced moves
+        used_regions: Set of region IDs already used
+        
+    Returns:
+        nxn binary array where 1 = valid queen placement for this training step
+    """
+    n = region_board.shape[0]
+    label_board = np.zeros((n, n), dtype=int)
+    
+    # If we have forced moves, only label those
+    if forced_moves:
+        for row, col in forced_moves:
+            label_board[row, col] = 1
+    else:
+        # No forced moves - label all valid remaining positions
+        unique_regions = np.unique(region_board)
+        
+        for region_id in unique_regions:
+            if region_id in used_regions:
+                continue
+                
+            # Find valid cells in this region
+            region_mask = (region_board == region_id)
+            valid_cells = region_mask & (~constraint_mask)
+            
+            # Label all valid cells in unused regions
+            label_board[valid_cells] = 1
+    
+    return label_board
+
+def generate_training_states(board_data):
+    """
+    Generate training states using priority-based labeling system.
+    
+    Creates training examples that prioritize forced moves (single cells, intersections, 
+    constraint-based) before falling back to labeling all valid remaining positions.
+    
+    Args:
+        board_data: Dict containing 'region', 'queen_positions', 'source', etc.
+        
+    Returns:
+        List of training examples, each with:
+        - 'region': board color layout
+        - 'partial_board': current queen placements  
+        - 'label_board': priority-based labels for next moves
+        - 'step': step number in sequence
+        - 'source': source identifier
+        - 'iteration': iteration from original data
+    """
+    region = board_data['region']
+    full_solution = board_data['queen_positions']
+    board_size = len(region)
+    
+    training_examples = []
+    current_partial_board = [[0]*board_size for _ in range(board_size)]
+    
+    # Track used constraints
+    used_columns = set()
+    used_regions = set()
+    remaining_queen_positions = full_solution.copy()
+    step = 0
+    
+    while remaining_queen_positions:
+        # Convert current state to numpy arrays
+        region_np = np.array(region)
+        partial_np = np.array(current_partial_board)
+        
+        # Detect forced moves for current state
+        forced_moves = detect_forced_moves(region_np, partial_np, used_columns, used_regions)
+        
+        # Create constraint mask for current state
+        placed_queens = [(r, c) for r in range(board_size) for c in range(board_size) 
+                        if current_partial_board[r][c] == 1]
+        constraint_mask = create_constraint_mask(region_np, placed_queens)
+        
+        # Build priority labels
+        label_board = build_priority_labels(region_np, constraint_mask, forced_moves, used_regions)
+        
+        # Create training example
+        training_examples.append({
+            'region': copy.deepcopy(region),
+            'partial_board': copy.deepcopy(current_partial_board),
+            'label_board': label_board.tolist(),
+            'step': step,
+            'source': board_data.get('source', ''),
+            'iteration': board_data.get('iteration', 0)
+        })
+        
+        # Decide which queen to place next
+        if forced_moves:
+            # Place first forced move
+            next_row, next_col = forced_moves[0]
+        else:
+            # No forced moves - pick any remaining queen
+            # Try to pick one that matches our labels if possible
+            label_positions = [(r, c) for r in range(board_size) for c in range(board_size) 
+                             if label_board[r, c] == 1]
+            
+            # Find a remaining queen position that matches our labels
+            next_row, next_col = None, None
+            for pos in remaining_queen_positions:
+                if tuple(pos) in [(r, c) for r, c in label_positions]:
+                    next_row, next_col = pos
+                    break
+            
+            # Fallback: just take first remaining queen
+            if next_row is None:
+                next_row, next_col = remaining_queen_positions[0]
+        
+        # Place the chosen queen
+        current_partial_board[next_row][next_col] = 1
+        used_columns.add(next_col)
+        used_regions.add(region[next_row][next_col])
+        
+        # Remove from remaining positions
+        remaining_queen_positions = [pos for pos in remaining_queen_positions 
+                                   if not (pos[0] == next_row and pos[1] == next_col)]
+        
+        step += 1
+    
+    return training_examples
