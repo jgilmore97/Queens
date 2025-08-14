@@ -26,11 +26,12 @@ def _detect_notebook_environment():
 class ModelConfig:
     """Model architecture configuration."""
     input_dim: int = 14
-    hidden_dim: int = 256
-    layer_count: int = 4
+    hidden_dim: int = 128
+    layer_count: int = 6
     dropout: float = 0.2
     heads: int = 2
-    model_type: str = "GAT"  # "GAT", "HeteroGAT", or "GNN"
+    input_injection_layers: Optional[list[int]] = [2,5]  # Layers to inject input features into
+    model_type: str = "HeteroGAT"  # "GAT", "HeteroGAT", or "GNN"
     
     # Heterogeneous model specific settings
     hetero_aggr: str = "sum"  # How to aggregate messages from different edge types: "sum", "mean", "max"
@@ -129,9 +130,9 @@ class Config:
 # Example configurations for different experiment types
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "hetero_gat_add_batchnorm",
-        "tags": ["heteo", "gat", "batchnorm"],
-        "notes": "Baseline heterogeneous GAT with batch normalization"
+        "experiment_name": "thinner_deeper_net",
+        "tags": ["heterogat", "thin_deep"],
+        "notes": "Baseline heterogeneous GAT with thinner and deeper architecture"
     }
 }
 

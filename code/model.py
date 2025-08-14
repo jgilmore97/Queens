@@ -89,7 +89,7 @@ class HeteroGAT(nn.Module):
     - region_constraint: color region mutual exclusion  
     - diagonal_constraint: immediate diagonal adjacency
     """
-    def __init__(self, input_dim, hidden_dim, layer_count, dropout, heads=2, use_batch_norm=True):
+    def __init__(self, input_dim, hidden_dim, layer_count, dropout, heads=2, use_batch_norm=True, input_injection_layers=None):
         super().__init__()
         
         # Each head outputs hidden_dim // heads channels; concatenated = hidden_dim
@@ -108,6 +108,13 @@ class HeteroGAT(nn.Module):
             ('cell', 'region_constraint', 'cell'), 
             ('cell', 'diagonal_constraint', 'cell')
         ]
+
+        # Store input injection configuration
+        if input_injection_layers is None:
+            # Default: inject input at later layers (e.g., last 2 layers)
+            self.input_injection_layers = set(range(max(1, layer_count-2), layer_count))
+        else:
+            self.input_injection_layers = set(input_injection_layers)
         
         # First heterogeneous layer
         self.conv1 = HeteroConv({
@@ -152,6 +159,11 @@ class HeteroGAT(nn.Module):
         
         self.linear = nn.Linear(hidden_dim, 1)
 
+        # Add projection layers for input injection
+        self.input_projections = nn.ModuleDict()
+        for layer_idx in self.input_injection_layers:
+            self.input_projections[str(layer_idx)] = nn.Linear(input_dim, hidden_dim)
+
     def forward(self, x_dict, edge_index_dict):
         """
         Forward pass for heterogeneous data with batch normalization.
@@ -160,6 +172,9 @@ class HeteroGAT(nn.Module):
             x_dict: Dictionary with node features, e.g., {'cell': tensor}
             edge_index_dict: Dictionary with edge indices for each edge type
         """
+
+        # Store original input features
+        original_input = x_dict['cell']  # Save this!
         
         x_dict = self.conv1(x_dict, edge_index_dict)
         
@@ -170,11 +185,19 @@ class HeteroGAT(nn.Module):
         x_dict = {key: self.dropout(x) for key, x in x_dict.items()}
         
         for i, conv in enumerate(self.convs):
+            layer_idx = i + 1
+            
             x_dict_new = conv(x_dict, edge_index_dict)
             
             if self.use_batch_norm:
                 x_dict_new = {key: self.batch_norms[i](x) for key, x in x_dict_new.items()}
             
+            # INPUT INJECTION: Add projected input features at specified layers
+            if layer_idx in self.input_injection_layers:
+                projected_input = self.input_projections[str(layer_idx)](original_input)
+                x_dict_new['cell'] = x_dict_new['cell'] + projected_input
+            
+            # Standard residual connection between every layer
             x_dict = {
                 key: self.relu(x_dict[key] + x_dict_new[key]) 
                 for key in x_dict.keys()
