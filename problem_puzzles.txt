@@ -1,2 +1,6 @@
+test_set_with_states.json
 'IMG_5080.jpg_rot0'
 'IMG_4850.jpg_rot0'
+
+FinalTestOfficialPuzzles.json
+'IMG_5226.jpg' #really hard puzzle - would love to be able to solve this one
