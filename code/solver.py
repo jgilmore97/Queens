@@ -267,8 +267,8 @@ class ModelEnabledQueensSolver:
         top_logit = legal_positions[0][1]
         
         # High confidence: try fewer candidates
-        if top_logit > 1.0:
-            num_candidates = min(6, len(legal_positions))
+        if top_logit > 0.5:
+            num_candidates = min(3, len(legal_positions))
         else:
             num_candidates = min(self.max_top_k, len(legal_positions))
         
@@ -724,7 +724,7 @@ def solve_queens_with_metrics(region, verbose=False):
             decision_log=decision_log.copy()
         )
 
-def compare_solvers(region_board, ml_solver=None, verbose=False):
+def compare_solvers(region_board, expected_solution ,ml_solver=None, verbose=False):
     """
     Compare traditional and ML-enabled solvers on the same puzzle.
     
@@ -748,7 +748,6 @@ def compare_solvers(region_board, ml_solver=None, verbose=False):
     if ml_solver is not None:
         print("\n🤖 Running ML-enabled solver...")
         try:
-            expected_solution = np.zeros_like(region_board)
             ml_result = ml_solver.solve_puzzle(region_board, expected_solution, verbose=verbose)
         except Exception as e:
             print(f"ML solver error: {e}")
