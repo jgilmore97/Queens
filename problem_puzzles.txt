@@ -1,5 +1,5 @@
 test_set_with_states.json
-'IMG_5080.jpg_rot0' -region blocker puzzle
+'IMG_5080.jpg_rot0' -region blocker puzzle - solved with no backtracking
 'IMG_4850.jpg_rot0'
 
 FinalTestOfficialPuzzles.json

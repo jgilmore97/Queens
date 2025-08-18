@@ -78,7 +78,7 @@ class ExperimentConfig:
     save_model_every_n_epochs: int = 10
     
     # Paths
-    checkpoint_dir: str = "checkpoints"
+    checkpoint_dir: str = "checkpoints/transformer"
     log_dir: str = "logs"
 
 @dataclass
@@ -130,9 +130,9 @@ class Config:
 # Example configurations for different experiment types
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "thinner_deeper_net with input injection",
-        "tags": ["heterogat", "thin_deep", "input_injection"],
-        "notes": "Baseline heterogeneous GAT with thinner and deeper architecture and input injection"
+        "experiment_name": "HeteroGAT with transformer layer - 6 layers",
+        "tags": ["heterogat", "transformer", "6-layers"],
+        "notes": "Testing HeteroGAT with a transformer layer for global context - 6 layers"
     }
 }
 
