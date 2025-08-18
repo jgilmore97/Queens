@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch_geometric.nn as pyg_nn
-from torch_geometric.nn import HeteroConv
+from torch_geometric.nn import HeteroConv, HGTConv
 
 
 class GNN(nn.Module):
@@ -156,6 +156,16 @@ class HeteroGAT(nn.Module):
     
         self.relu = nn.LeakyReLU(0.2)
         self.dropout = nn.Dropout(dropout)
+
+        # Include one graphformer layer to try to leverage global context
+        self.graphformer = HGTConv(
+            in_channels=hidden_dim,
+            out_channels=hidden_dim,
+            metadata=(['cell'], self.edge_types),
+            heads=heads
+        )
+        if self.use_batch_norm:
+            self.bn_graphformer = nn.BatchNorm1d(hidden_dim)
         
         self.linear = nn.Linear(hidden_dim, 1)
 
@@ -192,7 +202,7 @@ class HeteroGAT(nn.Module):
             if self.use_batch_norm:
                 x_dict_new = {key: self.batch_norms[i](x) for key, x in x_dict_new.items()}
             
-            # INPUT INJECTION: Add projected input features at specified layers
+            # Input Injection: Add projected input features at specified layers
             if layer_idx in self.input_injection_layers:
                 projected_input = self.input_projections[str(layer_idx)](original_input)
                 x_dict_new['cell'] = x_dict_new['cell'] + projected_input
@@ -204,6 +214,17 @@ class HeteroGAT(nn.Module):
             }
             x_dict = {key: self.dropout(x) for key, x in x_dict.items()}
         
+        # One graphformer layer to capture global context with residual connection
+        x_dict_new = self.graphformer(x_dict, edge_index_dict)
+        if self.use_batch_norm:
+            x_dict_new = {key: self.bn_graphformer(x) for key, x in x_dict_new.items()}
+        x_dict = {
+            key: self.relu(x_dict[key] + x_dict_new[key]) 
+            for key in x_dict.keys()
+        }
+        x_dict = {key: self.dropout(x) for key, x in x_dict.items()}
+        
+        # Final linear layer to get logits
         cell_features = x_dict['cell']
         logits = self.linear(cell_features).squeeze(-1)
         

@@ -27,7 +27,7 @@ class ModelConfig:
     """Model architecture configuration."""
     input_dim: int = 14
     hidden_dim: int = 128
-    layer_count: int = 6
+    layer_count: int = 3
     dropout: float = 0.2
     heads: int = 2
     input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])  # Layers to inject input features into
@@ -130,9 +130,9 @@ class Config:
 # Example configurations for different experiment types
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "thinner_deeper_net with input injection",
-        "tags": ["heterogat", "thin_deep", "input_injection"],
-        "notes": "Baseline heterogeneous GAT with thinner and deeper architecture and input injection"
+        "experiment_name": "HeteroGAT with transformer layer",
+        "tags": ["heterogat", "transformer"],
+        "notes": "Testing HeteroGAT with a transformer layer for global context"
     }
 }
 
