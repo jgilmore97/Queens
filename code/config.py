@@ -27,7 +27,7 @@ class ModelConfig:
     """Model architecture configuration."""
     input_dim: int = 14
     hidden_dim: int = 128
-    layer_count: int = 3
+    layer_count: int = 6
     dropout: float = 0.2
     heads: int = 2
     input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])  # Layers to inject input features into
@@ -78,7 +78,7 @@ class ExperimentConfig:
     save_model_every_n_epochs: int = 10
     
     # Paths
-    checkpoint_dir: str = "checkpoints"
+    checkpoint_dir: str = "checkpoints/transformer"
     log_dir: str = "logs"
 
 @dataclass
@@ -130,9 +130,9 @@ class Config:
 # Example configurations for different experiment types
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "HeteroGAT with transformer layer",
-        "tags": ["heterogat", "transformer"],
-        "notes": "Testing HeteroGAT with a transformer layer for global context"
+        "experiment_name": "HeteroGAT with transformer layer - 6 layers",
+        "tags": ["heterogat", "transformer", "6-layers"],
+        "notes": "Testing HeteroGAT with a transformer layer for global context - 6 layers"
     }
 }
 
