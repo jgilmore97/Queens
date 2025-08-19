@@ -78,7 +78,7 @@ class ExperimentConfig:
     save_model_every_n_epochs: int = 10
     
     # Paths
-    checkpoint_dir: str = "checkpoints/transformer"
+    checkpoint_dir: str = "checkpoints/transformer/mid_global"
     log_dir: str = "logs"
 
 @dataclass

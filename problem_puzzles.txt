@@ -4,3 +4,4 @@ test_set_with_states.json
 
 FinalTestOfficialPuzzles.json
 'IMG_5226.jpg' # solved with no backtracking
+'IMG_5319.jpg'

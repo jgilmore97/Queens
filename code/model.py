@@ -31,11 +31,11 @@ class GAT(nn.Module):
 
     Parameters
     ----------
-    input_dim   : int   – node-feature dimension (4 for your board encoding).
-    hidden_dim  : int   – total hidden size after concatenating all heads.
-    layer_count : int   – number of GAT layers (≥ 2).
-    dropout     : float – dropout prob applied after each attention layer.
-    heads       : int   – number of attention heads per layer.
+    input_dim   : int   — node-feature dimension (4 for your board encoding).
+    hidden_dim  : int   — total hidden size after concatenating all heads.
+    layer_count : int   — number of GAT layers (≥ 2).
+    dropout     : float — dropout prob applied after each attention layer.
+    heads       : int   — number of attention heads per layer.
     """
     def __init__(self, input_dim, hidden_dim, layer_count, dropout, heads=2):
         super().__init__()
@@ -82,14 +82,18 @@ class GAT(nn.Module):
 
 class HeteroGAT(nn.Module):
     """
-    Heterogeneous Graph Attention Network for Queens puzzle with BatchNorm.
+    Enhanced Heterogeneous Graph Attention Network for Queens puzzle with 
+    multi-stage global context injection to reduce Type 2 errors.
     
     Uses different attention mechanisms for different constraint types:
     - line_constraint: row/column mutual exclusion
     - region_constraint: color region mutual exclusion  
     - diagonal_constraint: immediate diagonal adjacency
+    
+    Key Enhancement: Mid-sequence global context layer to catch Type 2 errors early
     """
-    def __init__(self, input_dim, hidden_dim, layer_count, dropout, heads=2, use_batch_norm=True, input_injection_layers=None):
+    def __init__(self, input_dim, hidden_dim, layer_count, dropout, heads=2, 
+                 use_batch_norm=True, input_injection_layers=None):
         super().__init__()
         
         # Each head outputs hidden_dim // heads channels; concatenated = hidden_dim
@@ -101,6 +105,7 @@ class HeteroGAT(nn.Module):
         self.head_dim = head_dim
         self.dropout_p = dropout
         self.use_batch_norm = use_batch_norm
+        self.layer_count = layer_count
         
         # Define edge types we expect
         self.edge_types = [
@@ -115,6 +120,12 @@ class HeteroGAT(nn.Module):
             self.input_injection_layers = set(range(max(1, layer_count-2), layer_count))
         else:
             self.input_injection_layers = set(input_injection_layers)
+        
+        # Configure mid-sequence global context layer at 1/3 through network
+        self.mid_global_layer = max(1, layer_count // 3)
+        
+        print(f"🧠 HeteroGAT configured with mid-global context at layer {self.mid_global_layer}/{layer_count}")
+        print(f"   Expected to reduce Type 2 errors via early global awareness")
         
         # First heterogeneous layer
         self.conv1 = HeteroConv({
@@ -157,15 +168,25 @@ class HeteroGAT(nn.Module):
         self.relu = nn.LeakyReLU(0.2)
         self.dropout = nn.Dropout(dropout)
 
-        # Include one graphformer layer to try to leverage global context
-        self.graphformer = HGTConv(
+        # MID-SEQUENCE GLOBAL CONTEXT LAYER - Key Innovation for Type 2 Error Reduction
+        self.mid_graphformer = HGTConv(
             in_channels=hidden_dim,
             out_channels=hidden_dim,
             metadata=(['cell'], self.edge_types),
             heads=heads
         )
         if self.use_batch_norm:
-            self.bn_graphformer = nn.BatchNorm1d(hidden_dim)
+            self.bn_mid_graphformer = nn.BatchNorm1d(hidden_dim)
+
+        # FINAL GLOBAL CONTEXT LAYER - Overall refinement
+        self.final_graphformer = HGTConv(
+            in_channels=hidden_dim,
+            out_channels=hidden_dim,
+            metadata=(['cell'], self.edge_types),
+            heads=heads
+        )
+        if self.use_batch_norm:
+            self.bn_final_graphformer = nn.BatchNorm1d(hidden_dim)
         
         self.linear = nn.Linear(hidden_dim, 1)
 
@@ -176,16 +197,19 @@ class HeteroGAT(nn.Module):
 
     def forward(self, x_dict, edge_index_dict):
         """
-        Forward pass for heterogeneous data with batch normalization.
+        Forward pass with multi-stage global context injection.
+        
+        Key Enhancement: Mid-sequence global context to catch Type 2 errors early
         
         Args:
             x_dict: Dictionary with node features, e.g., {'cell': tensor}
             edge_index_dict: Dictionary with edge indices for each edge type
         """
 
-        # Store original input features
-        original_input = x_dict['cell']  # Save this!
+        # Store original input features for injection
+        original_input = x_dict['cell']
         
+        # STAGE 1: Initial heterogeneous attention
         x_dict = self.conv1(x_dict, edge_index_dict)
         
         if self.use_batch_norm:
@@ -194,9 +218,11 @@ class HeteroGAT(nn.Module):
         x_dict = {key: self.relu(x) for key, x in x_dict.items()}
         x_dict = {key: self.dropout(x) for key, x in x_dict.items()}
         
+        # STAGE 2: Progressive GAT layers with mid-sequence global injection
         for i, conv in enumerate(self.convs):
             layer_idx = i + 1
             
+            # Regular heterogeneous attention step
             x_dict_new = conv(x_dict, edge_index_dict)
             
             if self.use_batch_norm:
@@ -207,24 +233,38 @@ class HeteroGAT(nn.Module):
                 projected_input = self.input_projections[str(layer_idx)](original_input)
                 x_dict_new['cell'] = x_dict_new['cell'] + projected_input
             
-            # Standard residual connection between every layer
+            # Standard residual connection
             x_dict = {
                 key: self.relu(x_dict[key] + x_dict_new[key]) 
                 for key in x_dict.keys()
             }
             x_dict = {key: self.dropout(x) for key, x in x_dict.items()}
+            
+            # MID-SEQUENCE GLOBAL CONTEXT INJECTION - Type 2 Error Prevention
+            if layer_idx == self.mid_global_layer:
+                # Apply global context via HGT transformer
+                x_dict_global = self.mid_graphformer(x_dict, edge_index_dict)
+                if self.use_batch_norm:
+                    x_dict_global = {key: self.bn_mid_graphformer(x) for key, x in x_dict_global.items()}
+                
+                # Integrate global context with residual connection
+                x_dict = {
+                    key: self.relu(x_dict[key] + x_dict_global[key]) 
+                    for key in x_dict.keys()
+                }
+                x_dict = {key: self.dropout(x) for key, x in x_dict.items()}
         
-        # One graphformer layer to capture global context with residual connection
-        x_dict_new = self.graphformer(x_dict, edge_index_dict)
+        # STAGE 3: Final global context refinement
+        x_dict_final_global = self.final_graphformer(x_dict, edge_index_dict)
         if self.use_batch_norm:
-            x_dict_new = {key: self.bn_graphformer(x) for key, x in x_dict_new.items()}
+            x_dict_final_global = {key: self.bn_final_graphformer(x) for key, x in x_dict_final_global.items()}
         x_dict = {
-            key: self.relu(x_dict[key] + x_dict_new[key]) 
+            key: self.relu(x_dict[key] + x_dict_final_global[key]) 
             for key in x_dict.keys()
         }
         x_dict = {key: self.dropout(x) for key, x in x_dict.items()}
         
-        # Final linear layer to get logits
+        # STAGE 4: Final prediction
         cell_features = x_dict['cell']
         logits = self.linear(cell_features).squeeze(-1)
         
