@@ -305,8 +305,8 @@ class ModelEnabledQueensSolver:
         
         is_valid = len(violations) == 0
         
-        if not is_valid and verbose:
-            print(f"    Invalid ({row},{col}): {', '.join(violations)}")
+        # if not is_valid and verbose:
+        #     print(f"    Invalid ({row},{col}): {', '.join(violations)}")
         
         return is_valid, violations
     
@@ -600,29 +600,21 @@ def solve_queens_with_metrics(region, verbose=False):
     steps_taken = 0
     backtracks = 0
     decision_log = []
+    constraint_checks = 0  # Track constraint checks separately for analysis
     
     columns_used = set()
     regions_used = set()
     positions = []
 
     def backtrack(row):
-        nonlocal steps_taken, backtracks
+        nonlocal steps_taken, backtracks, constraint_checks
         
         if row == n:
             return True
         
         for col in range(n):
-            steps_taken += 1
+            constraint_checks += 1
             reg_id = region[row, col]
-            
-            # Log this decision attempt
-            decision_log.append({
-                'step': steps_taken,
-                'position': (row, col),
-                'region': int(reg_id),
-                'attempt_type': 'placement_attempt',
-                'constraints_violated': []
-            })
             
             # Check constraints and track violations
             constraints_violated = []
@@ -640,18 +632,26 @@ def solve_queens_with_metrics(region, verbose=False):
             if diagonal_conflict:
                 constraints_violated.append('diagonal_conflict')
             
-            # Update decision log with constraint violations
-            decision_log[-1]['constraints_violated'] = constraints_violated
-            decision_log[-1]['is_valid_move'] = len(constraints_violated) == 0
-            
-            # Skip if any constraints violated
+            # Skip if any constraints violated (don't count as step)
             if constraints_violated:
                 if verbose:
-                    print(f"Step {steps_taken}: Position ({row}, {col}) invalid - {', '.join(constraints_violated)}")
+                    print(f"Constraint check {constraint_checks}: Position ({row}, {col}) invalid - {', '.join(constraints_violated)}")
                 continue
             
+            # Valid move - this counts as a step
+            steps_taken += 1
             if verbose:
                 print(f"Step {steps_taken}: Placing queen at ({row}, {col}) in region {reg_id}")
+            
+            # Log this valid placement
+            decision_log.append({
+                'step': steps_taken,
+                'position': (row, col),
+                'region': int(reg_id),
+                'attempt_type': 'placement',
+                'constraints_violated': [],
+                'is_valid_move': True
+            })
             
             # place queen
             columns_used.add(col)
