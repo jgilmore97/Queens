@@ -45,7 +45,8 @@ class ExperimentTracker:
             "hidden_dim": self.config.model.hidden_dim,
             "layer_count": self.config.model.layer_count,
             "dropout": self.config.model.dropout,
-            "heads": self.config.model.heads,
+            "gat_heads": self.config.model.gat_heads,
+            "hgt_heads": self.config.model.hgt_heads,
             "epochs": self.config.training.epochs,
             "batch_size": self.config.training.batch_size,
             "learning_rate": self.config.training.learning_rate,
@@ -297,7 +298,8 @@ class ExperimentTracker:
                 "hidden_dim": self.config.model.hidden_dim,
                 "layer_count": self.config.model.layer_count,
                 "dropout": self.config.model.dropout,
-                "heads": self.config.model.heads,
+                "gat_heads": self.config.model.gat_heads,
+                "hgt_heads": self.config.model.hgt_heads,
             }
         }
         

@@ -29,17 +29,19 @@ class ModelConfig:
     hidden_dim: int = 128
     layer_count: int = 6
     dropout: float = 0.2
-    heads: int = 2
-    input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])  # Layers to inject input features into
-    model_type: str = "HeteroGAT"  # "GAT", "HeteroGAT", or "GNN"
     
-    # Heterogeneous model specific settings
-    hetero_aggr: str = "sum"  # How to aggregate messages from different edge types: "sum", "mean", "max"
+    # Separate head configurations
+    gat_heads: int = 2      # For constraint-specific attention in GAT layers
+    hgt_heads: int = 4      # For global context attention in HGT layers
+    
+    input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])
+    model_type: str = "HeteroGAT" # "GAT", "HeteroGAT", or "GNN"
+    hetero_aggr: str = "sum"
 
 @dataclass
 class TrainingConfig:
     """Training hyperparameters."""
-    epochs: int = 12
+    epochs: int = 16
     batch_size: int = 512
     learning_rate: float = 1e-3
     weight_decay: float = 1e-5
@@ -78,7 +80,7 @@ class ExperimentConfig:
     save_model_every_n_epochs: int = 10
     
     # Paths
-    checkpoint_dir: str = "checkpoints/transformer/mid_global"
+    checkpoint_dir: str = "checkpoints/transformer/8_heads"
     log_dir: str = "logs"
 
 @dataclass
@@ -130,9 +132,9 @@ class Config:
 # Example configurations for different experiment types
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "HeteroGAT with transformer layer - 6 layers",
-        "tags": ["heterogat", "transformer", "6-layers"],
-        "notes": "Testing HeteroGAT with a transformer layer for global context - 6 layers"
+        "experiment_name": "HeteroGAT with transformer layer - 6 layers, 2 GAT heads, 4 HGT heads",
+        "tags": ["heterogat", "transformer", "6-layers", "4-hgt-heads"],
+        "notes": "Testing HeteroGAT/transformer with 4 HGT heads for global context"
     }
 }
 

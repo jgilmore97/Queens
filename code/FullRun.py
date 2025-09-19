@@ -70,7 +70,8 @@ def main_heterogeneous_training():
         hidden_dim=hetero_config.model.hidden_dim,
         layer_count=hetero_config.model.layer_count,
         dropout=hetero_config.model.dropout,
-        heads=hetero_config.model.heads
+        gat_heads=hetero_config.model.gat_heads,
+        hgt_heads=hetero_config.model.hgt_heads 
     )
     
     total_params = sum(p.numel() for p in model.parameters())
@@ -165,7 +166,8 @@ def compare_homogeneous_vs_heterogeneous():
         hidden_dim=config.model.hidden_dim,
         layer_count=config.model.layer_count,
         dropout=config.model.dropout,
-        heads=config.model.heads
+        gat_heads=hetero_config.model.gat_heads,
+        hgt_heads=hetero_config.model.hgt_heads 
     )
     
     try:
@@ -226,7 +228,8 @@ def quick_hetero_test():
         hidden_dim=config.model.hidden_dim,
         layer_count=config.model.layer_count,
         dropout=config.model.dropout,
-        heads=config.model.heads
+        gat_heads=config.model.gat_heads,
+        hgt_heads=config.model.hgt_heads 
     )
     
     try:

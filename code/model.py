@@ -81,28 +81,18 @@ class GAT(nn.Module):
         return logits
 
 class HeteroGAT(nn.Module):
-    """
-    Enhanced Heterogeneous Graph Attention Network for Queens puzzle with 
-    multi-stage global context injection to reduce Type 2 errors.
-    
-    Uses different attention mechanisms for different constraint types:
-    - line_constraint: row/column mutual exclusion
-    - region_constraint: color region mutual exclusion  
-    - diagonal_constraint: immediate diagonal adjacency
-    
-    Key Enhancement: Mid-sequence global context layer to catch Type 2 errors early
-    """
-    def __init__(self, input_dim, hidden_dim, layer_count, dropout, heads=2, 
+    def __init__(self, input_dim, hidden_dim, layer_count, dropout, gat_heads=2, hgt_heads=6, 
                  use_batch_norm=True, input_injection_layers=None):
         super().__init__()
         
-        # Each head outputs hidden_dim // heads channels; concatenated = hidden_dim
-        head_dim = hidden_dim // heads
-        assert hidden_dim % heads == 0, "hidden_dim must be divisible by heads"
+        # Each GAT head outputs hidden_dim // gat_heads channels
+        gat_head_dim = hidden_dim // gat_heads
+        assert hidden_dim % gat_heads == 0, "hidden_dim must be divisible by gat_heads"
         
         self.hidden_dim = hidden_dim
-        self.heads = heads
-        self.head_dim = head_dim
+        self.gat_heads = gat_heads
+        self.hgt_heads = hgt_heads
+        self.gat_head_dim = gat_head_dim
         self.dropout_p = dropout
         self.use_batch_norm = use_batch_norm
         self.layer_count = layer_count
@@ -116,23 +106,25 @@ class HeteroGAT(nn.Module):
 
         # Store input injection configuration
         if input_injection_layers is None:
-            # Default: inject input at later layers (e.g., last 2 layers)
             self.input_injection_layers = set(range(max(1, layer_count-2), layer_count))
         else:
             self.input_injection_layers = set(input_injection_layers)
         
-        # Configure mid-sequence global context layer at 1/3 through network
+        # Configure mid-sequence global context layer
         self.mid_global_layer = max(1, layer_count // 3)
         
-        print(f"🧠 HeteroGAT configured with mid-global context at layer {self.mid_global_layer}/{layer_count}")
-        print(f"   Expected to reduce Type 2 errors via early global awareness")
+        print(f"🧠 HeteroGAT configured:")
+        print(f"   GAT heads: {gat_heads} (constraint-specific attention)")
+        print(f"   HGT heads: {hgt_heads} (global context attention)")
+        print(f"   Mid-global context at layer {self.mid_global_layer}/{layer_count}")
+        print(f"   Expected to reduce Type 2 errors via enhanced global reasoning")
         
-        # First heterogeneous layer
+        # First heterogeneous layer 
         self.conv1 = HeteroConv({
             edge_type: pyg_nn.GATConv(
                 in_channels=input_dim,
-                out_channels=head_dim,
-                heads=heads,
+                out_channels=gat_head_dim,
+                heads=gat_heads,
                 concat=True,
                 dropout=dropout,
                 add_self_loops=True,
@@ -144,6 +136,7 @@ class HeteroGAT(nn.Module):
         if self.use_batch_norm:
             self.bn1 = nn.BatchNorm1d(hidden_dim)
 
+        # Additional GAT layers
         self.convs = nn.ModuleList()
         self.batch_norms = nn.ModuleList()
         
@@ -151,8 +144,8 @@ class HeteroGAT(nn.Module):
             hetero_conv = HeteroConv({
                 edge_type: pyg_nn.GATConv(
                     in_channels=hidden_dim,
-                    out_channels=head_dim,
-                    heads=heads,
+                    out_channels=gat_head_dim,
+                    heads=gat_heads,
                     concat=True,
                     dropout=dropout,
                     add_self_loops=True,
@@ -161,29 +154,28 @@ class HeteroGAT(nn.Module):
             }, aggr='sum')
             self.convs.append(hetero_conv)
             
-            # Add batch norm for each additional layer
             if self.use_batch_norm:
                 self.batch_norms.append(nn.BatchNorm1d(hidden_dim))
     
         self.relu = nn.LeakyReLU(0.2)
         self.dropout = nn.Dropout(dropout)
 
-        # MID-SEQUENCE GLOBAL CONTEXT LAYER - Key Innovation for Type 2 Error Reduction
+        # MID-SEQUENCE GLOBAL CONTEXT LAYER
         self.mid_graphformer = HGTConv(
             in_channels=hidden_dim,
             out_channels=hidden_dim,
             metadata=(['cell'], self.edge_types),
-            heads=heads
+            heads=hgt_heads 
         )
         if self.use_batch_norm:
             self.bn_mid_graphformer = nn.BatchNorm1d(hidden_dim)
 
-        # FINAL GLOBAL CONTEXT LAYER - Overall refinement
+        # FINAL GLOBAL CONTEXT LAYER
         self.final_graphformer = HGTConv(
             in_channels=hidden_dim,
             out_channels=hidden_dim,
             metadata=(['cell'], self.edge_types),
-            heads=heads
+            heads=hgt_heads
         )
         if self.use_batch_norm:
             self.bn_final_graphformer = nn.BatchNorm1d(hidden_dim)
