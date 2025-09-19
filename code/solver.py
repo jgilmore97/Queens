@@ -468,7 +468,8 @@ def load_solver(model_path: str, device: str = "cuda") -> ModelEnabledQueensSolv
         hidden_dim=model_config['hidden_dim'],
         layer_count=model_config['layer_count'],
         dropout=model_config['dropout'],
-        heads=model_config['heads']
+        gat_heads=model_config['gat_heads'],
+        hgt_heads=model_config['hgt_heads']
     )
     
     # Load weights
