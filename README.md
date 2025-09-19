@@ -37,16 +37,19 @@ This project trains a **Hybrid GAT-HGT model** to predict optimal queen placemen
 - **Model Size**: 3-layer Hybrid GAT-HGT with ~85k parameters
 - **Solver Integration**: ML guidance with traditional backtracking fallback
 
-# Project Structure
-├── board_manipulation.py    # Image processing & data generation
-├── data_loader.py          # PyTorch Geometric dataset handling
-├── model.py                # Hybrid GAT-HGT implementation
-├── train.py                # Training loops & metrics
-├── solver.py               # ML-enhanced backtracking solver
-├── evaluation_analysis.py  # Performance analysis & visualization
-├── config.py               # Configuration management
-├── experiment_tracker_fixed.py # W&B experiment tracking
-└── FullRun.py              # Main execution scripts
+## 📁 Project Structure
+<pre>
+  code
+  ├── board_manipulation.py 
+  ├── data_loader.py 
+  ├── model.py 
+  ├── train.py 
+  ├── solver.py 
+  ├── evaluation_analysis.py 
+  ├── config.py 
+  ├── experiment_tracker_fixed.py 
+  └── FullRun.py 
+</pre>
 
 ## 🧠 Technical Insights
 
