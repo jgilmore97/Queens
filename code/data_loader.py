@@ -275,3 +275,104 @@ def get_queens_loaders(
     val_loader   = DataLoader(ds_val,   shuffle=False,        **kwargs)
 
     return train_loader, val_loader
+
+class MixedDataset(Dataset):
+    """
+    Dataset that mixes two datasets with stochastic sampling while ensuring 
+    all examples are used before reuse.
+    """
+    def __init__(self, dataset1, dataset2, ratio1=0.75):
+        """
+        Args:
+            dataset1: First dataset (typically state-0, gets ratio1 probability)
+            dataset2: Second dataset (typically filtered old dataset, gets 1-ratio1 probability)  
+            ratio1: Probability of sampling from dataset1 (0.75 = 75%)
+        """
+        self.dataset1 = dataset1  # state-0 dataset
+        self.dataset2 = dataset2  # filtered old dataset
+        self.ratio1 = ratio1
+        
+        # Remaining pools - refilled when exhausted
+        self.remaining_pool1 = list(range(len(dataset1)))
+        self.remaining_pool2 = list(range(len(dataset2)))
+        self._shuffle_pools()
+        
+        # Length is minimum of the two datasets
+        self._len = min(len(dataset1), len(dataset2))
+        
+        print(f"MixedDataset created:")
+        print(f"  Dataset1 (state-0): {len(dataset1)} samples ({ratio1:.1%} sampling)")
+        print(f"  Dataset2 (old filtered): {len(dataset2)} samples ({1-ratio1:.1%} sampling)")
+        print(f"  Epoch length: {self._len}")
+    
+    def _shuffle_pools(self):
+        """Shuffle both remaining pools."""
+        random.shuffle(self.remaining_pool1)
+        random.shuffle(self.remaining_pool2)
+    
+    def _sample_from_pool1(self):
+        """Sample from dataset1, refill pool if exhausted."""
+        if not self.remaining_pool1:
+            self.remaining_pool1 = list(range(len(self.dataset1)))
+            random.shuffle(self.remaining_pool1)
+        
+        idx = self.remaining_pool1.pop()
+        return self.dataset1[idx]
+    
+    def _sample_from_pool2(self):
+        """Sample from dataset2, refill pool if exhausted."""
+        if not self.remaining_pool2:
+            self.remaining_pool2 = list(range(len(self.dataset2)))
+            random.shuffle(self.remaining_pool2)
+        
+        idx = self.remaining_pool2.pop()
+        return self.dataset2[idx]
+    
+    def __getitem__(self, idx):
+        """Stochastically sample from either dataset based on ratio."""
+        if random.random() < self.ratio1:
+            return self._sample_from_pool1()
+        else:
+            return self._sample_from_pool2()
+    
+    def __len__(self):
+        return self._len
+
+def create_filtered_old_dataset(json_path, val_ratio, seed, split="train"):
+    """Create dataset from old multi-state data with iteration != 0 filtered out."""
+    from data_loader import QueensDataset
+    
+    # Create dataset but we'll filter it
+    full_dataset = QueensDataset(
+        json_path,
+        split="all",  # Get all data first
+        val_ratio=val_ratio,
+        seed=seed
+    )
+    
+    # Filter out iteration 0 examples
+    filtered_records = [
+        record for record in full_dataset.records 
+        if record.get('iteration', 0) != 0
+    ]
+    
+    print(f"Filtered old dataset: {len(full_dataset.records)} -> {len(filtered_records)} (removed iteration 0)")
+    
+    # Create new dataset with filtered records
+    filtered_dataset = QueensDataset.__new__(QueensDataset)
+    filtered_dataset.__dict__.update(full_dataset.__dict__)
+    
+    # Apply train/val split to filtered records  
+    if split == "train":
+        # Use same splitting logic as original QueensDataset
+        from data_loader import _split_by_img
+        train_records, val_records = _split_by_img(filtered_records, val_ratio, seed)
+        filtered_dataset.records = train_records
+    elif split == "val":
+        from data_loader import _split_by_img
+        train_records, val_records = _split_by_img(filtered_records, val_ratio, seed)
+        filtered_dataset.records = val_records
+    else:
+        filtered_dataset.records = filtered_records
+    
+    return filtered_dataset

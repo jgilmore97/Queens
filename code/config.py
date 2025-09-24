@@ -41,11 +41,16 @@ class ModelConfig:
 @dataclass
 class TrainingConfig:
     """Training hyperparameters."""
-    epochs: int = 16
+    epochs: int = 18
     batch_size: int = 512
     learning_rate: float = 1e-3
     weight_decay: float = 1e-5
     val_ratio: float = 0.10
+    
+    # Dataset switching
+    switch_epoch: int = 5  # Epoch to switch to state-0 dataset (999 = never switch)
+    state0_json_path: str = "state0_training_states.json"
+    mixed_ratio: float = 0.75  # Ratio of state-0 to old data in mixed dataset
     
     # Loss function
     focal_alpha: float = 0.25
@@ -80,7 +85,7 @@ class ExperimentConfig:
     save_model_every_n_epochs: int = 10
     
     # Paths
-    checkpoint_dir: str = "checkpoints/transformer/8_heads"
+    checkpoint_dir: str = "checkpoints/transformer/post_train_state0"
     log_dir: str = "logs"
 
 @dataclass
@@ -132,9 +137,9 @@ class Config:
 # Example configurations for different experiment types
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "HeteroGAT with transformer layer - 6 layers, 2 GAT heads, 4 HGT heads",
-        "tags": ["heterogat", "transformer", "6-layers", "4-hgt-heads"],
-        "notes": "Testing HeteroGAT/transformer with 4 HGT heads for global context"
+        "experiment_name": "HeteroGAT with transformer layer - post train on state0",
+        "tags": ["heterogat", "transformer", "post-train"],
+        "notes": "Training HeteroGAT model with transformer layer, followed by additional training on state-0 dataset"
     }
 }
 
