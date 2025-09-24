@@ -8,7 +8,9 @@ from tqdm.auto import tqdm
 import numpy as np
 
 from experiment_tracker_fixed import ExperimentTracker
+from data_loader import get_queens_loaders, QueensDataset, MixedDataset, create_filtered_old_dataset
 from config import Config
+
 
 def calculate_top1_metrics(logits, labels, batch_info):
     """
@@ -594,21 +596,59 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
         best_epoch = 0
         best_top1_epoch = 0
         
+        # Dataset switching variables
+        state0_train_loader, state0_val_loader = None, None
+        current_dataset = "multi-state"
+        
         print(f"Starting training for {config.training.epochs} epochs")
         print(f"Device: {device}")
         print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
         print("Tracking both threshold-based and top-1 metrics")
+        if config.training.switch_epoch < config.training.epochs:
+            print(f"Will switch to state-0 dataset at epoch {config.training.switch_epoch}")
         
         for epoch in range(1, config.training.epochs + 1):
+            # Handle dataset switching
+            if epoch == config.training.switch_epoch and state0_train_loader is None:
+                print(f"\n🔄 Switching to state-0 dataset at epoch {epoch}")
+                print(f"Loading state-0 dataset from {config.training.state0_json_path}")
+                
+                from data_loader import get_queens_loaders
+                state0_train_loader, state0_val_loader = get_queens_loaders(
+                    config.training.state0_json_path,
+                    batch_size=config.training.batch_size // 2,  # Half batch size
+                    val_ratio=config.training.val_ratio,
+                    seed=config.data.seed,
+                    num_workers=config.data.num_workers,
+                    pin_memory=config.data.pin_memory,
+                    shuffle_train=config.data.shuffle_train,
+                )
+                current_dataset = "state-0"
+                print(f"State-0 train samples: {len(state0_train_loader.dataset):,}")
+                print(f"State-0 val samples: {len(state0_val_loader.dataset):,}")
+            
+            # Select active loaders
+            if epoch >= config.training.switch_epoch and state0_train_loader is not None:
+                active_train_loader = state0_train_loader
+                current_dataset = "state-0"
+            else:
+                active_train_loader = train_loader
+                current_dataset = "multi-state"
+            
             epoch_start_time = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
             epoch_end_time = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
             
             if epoch_start_time:
                 epoch_start_time.record()
             
-            train_metrics = train_epoch(model, train_loader, criterion, optimizer, device, epoch)
+            train_metrics = train_epoch(model, active_train_loader, criterion, optimizer, device, epoch)
             
+            # Run validation on both datasets if state0 is available
             val_metrics = evaluate_epoch(model, val_loader, criterion, device, epoch)
+            if state0_val_loader is not None:
+                state0_val_metrics = evaluate_epoch(model, state0_val_loader, criterion, device, epoch)
+            else:
+                state0_val_metrics = None
             
             if isinstance(scheduler, ReduceLROnPlateau):
                 scheduler.step(val_metrics['f1'])
@@ -649,11 +689,16 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
             # Save checkpoint (mark as best if either metric improved)
             tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_f1 or is_best_top1)
             
-            print(f"Epoch {epoch:02d} | "
-                  f"Train: L={train_metrics['loss']:.4f} F1={train_metrics['f1']:.3f} T1={train_metrics['top1_accuracy']:.3f} | "
-                  f"Val: L={val_metrics['loss']:.4f} F1={val_metrics['f1']:.3f} T1={val_metrics['top1_accuracy']:.3f} | "
-                  f"LR={current_lr:.1e} | "
-                  f"{'🎯F1' if is_best_f1 else ''}{'🎯T1' if is_best_top1 else ''}")
+            # Enhanced logging with dual validation and dataset info
+            base_log = (f"Epoch {epoch:02d} [{current_dataset}] | "
+                       f"Train: L={train_metrics['loss']:.4f} Acc={train_metrics['accuracy']:.3f} F1={train_metrics['f1']:.3f} T1={train_metrics['top1_accuracy']:.3f} | "
+                       f"Val: L={val_metrics['loss']:.4f} Acc={val_metrics['accuracy']:.3f} F1={val_metrics['f1']:.3f} T1={val_metrics['top1_accuracy']:.3f}")
+            
+            if state0_val_metrics is not None:
+                base_log += f" | State0-Val: Acc={state0_val_metrics['accuracy']:.3f} F1={state0_val_metrics['f1']:.3f} T1={state0_val_metrics['top1_accuracy']:.3f}"
+            
+            base_log += f" | LR={current_lr:.1e} | {'🎯F1' if is_best_f1 else ''}{'🎯T1' if is_best_top1 else ''}"
+            print(base_log)
         
         print(f"\nTraining completed!")
         print(f"Best validation F1: {best_val_f1:.4f} (epoch {best_epoch})")
@@ -695,22 +740,119 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
         best_epoch = 0
         best_top1_epoch = 0
         
+        # Dataset switching variables
+        mixed_train_loader, state0_val_loader = None, None
+        current_dataset = "multi-state"
+        switched = False
+        
         print(f"Starting HETEROGENEOUS training for {config.training.epochs} epochs")
         print(f"Device: {device}")
         print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
         print("Tracking both threshold-based and top-1 metrics with heterogeneous edges")
         print("Edge types: line_constraint, region_constraint, diagonal_constraint")
+        if config.training.switch_epoch < config.training.epochs:
+            print(f"Will switch to mixed dataset (75% state-0, 25% old) at epoch {config.training.switch_epoch}")
         
         for epoch in range(1, config.training.epochs + 1):
+            # Handle dataset switching
+            if epoch == config.training.switch_epoch and mixed_train_loader is None:
+                print(f"\n🔄 Switching to mixed dataset at epoch {epoch}")
+                print(f"Loading state-0 dataset from {config.training.state0_json_path}")
+                
+                from data_loader import get_queens_loaders
+                
+                # Load state-0 dataset
+                state0_train_dataset = QueensDataset(
+                    config.training.state0_json_path,
+                    split="train",
+                    val_ratio=config.training.val_ratio,
+                    seed=config.data.seed
+                )
+                state0_val_dataset = QueensDataset(
+                    config.training.state0_json_path,
+                    split="val", 
+                    val_ratio=config.training.val_ratio,
+                    seed=config.data.seed
+                )
+                
+                # Load filtered old dataset (no iteration 0)
+                filtered_old_train_dataset = create_filtered_old_dataset(
+                    config.data.train_json,
+                    val_ratio=config.training.val_ratio,
+                    seed=config.data.seed,
+                    split="train"
+                )
+                
+                # Create mixed dataset (75% state-0, 25% old filtered)
+                mixed_dataset = MixedDataset(state0_train_dataset, filtered_old_train_dataset, config.training.mixed_ratio)
+                
+                # Create mixed train loader with half batch size
+                mixed_train_loader = DataLoader(
+                    mixed_dataset,
+                    batch_size=config.training.batch_size // 2,
+                    num_workers=config.data.num_workers,
+                    pin_memory=config.data.pin_memory,
+                    shuffle=True,  # Still shuffle the order samples are drawn
+                    follow_batch=[]
+                )
+                
+                # Create state0 val loader
+                state0_val_loader = DataLoader(
+                    state0_val_dataset,
+                    batch_size=config.training.batch_size // 4,
+                    num_workers=config.data.num_workers,
+                    pin_memory=config.data.pin_memory,
+                    shuffle=False,
+                    follow_batch=[]
+                )
+                
+                current_dataset = "mixed (75% state-0, 25% old)"
+                switched = True
+                
+                # Reduce learning rate by 1 order of magnitude
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] /= 2
+                print(f"Divided learning rate by 2. Now: {optimizer.param_groups[0]['lr']:.1e}")
+                
+                # # Freeze all layers except final_graphformer and linear
+                # frozen_params = 0
+                # trainable_params = 0
+                # for name, param in model.named_parameters():
+                #     if 'final_graphformer' in name or 'linear' in name:
+                #         param.requires_grad = True
+                #         trainable_params += param.numel()
+                #     else:
+                #         param.requires_grad = False
+                #         frozen_params += param.numel()
+                
+                # print(f"Froze {frozen_params:,} parameters, kept {trainable_params:,} trainable")
+                # print(f"Training only: final_graphformer + linear layers")
+                
+                print(f"Mixed train samples: {len(mixed_dataset):,}")
+                print(f"State-0 val samples: {len(state0_val_dataset):,}")
+            
+            # Select active loaders
+            if switched and mixed_train_loader is not None:
+                active_train_loader = mixed_train_loader
+                current_dataset = "mixed (75% state-0, 25% old)"
+            else:
+                active_train_loader = train_loader
+                current_dataset = "multi-state"
+            
             epoch_start_time = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
             epoch_end_time = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
             
             if epoch_start_time:
                 epoch_start_time.record()
             
-            train_metrics = train_epoch_hetero(model, train_loader, criterion, optimizer, device, epoch)
+            train_metrics = train_epoch_hetero(model, active_train_loader, criterion, optimizer, device, epoch)
             
+            # Run validation on both datasets if state0 is available
             val_metrics = evaluate_epoch_hetero(model, val_loader, criterion, device, epoch)
+            if state0_val_loader is not None:
+                state0_val_metrics = evaluate_epoch_hetero(model, state0_val_loader, criterion, device, epoch)
+            else:
+                state0_val_metrics = None
             
             if isinstance(scheduler, ReduceLROnPlateau):
                 scheduler.step(val_metrics['f1'])
@@ -718,7 +860,7 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
                 scheduler.step()
             
             # Update learning rate in tracker
-            current_lr = scheduler.get_last_lr()[0] if hasattr(scheduler, 'get_last_lr') else config.training.learning_rate
+            current_lr = optimizer.param_groups[0]['lr']  # Get actual LR after manual adjustment
             tracker.set_current_lr(current_lr)
             
             if epoch_end_time:
@@ -751,16 +893,21 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
             # Save checkpoint (mark as best if either metric improved)
             tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_f1 or is_best_top1)
             
-            print(f"Epoch {epoch:02d} | "
-                  f"Train: L={train_metrics['loss']:.4f} F1={train_metrics['f1']:.3f} T1={train_metrics['top1_accuracy']:.3f} | "
-                  f"Val: L={val_metrics['loss']:.4f} F1={val_metrics['f1']:.3f} T1={val_metrics['top1_accuracy']:.3f} | "
-                  f"LR={current_lr:.1e} | "
-                  f"{'🎯F1' if is_best_f1 else ''}{'🎯T1' if is_best_top1 else ''}")
+            # Enhanced logging with dual validation and dataset info
+            base_log = (f"Epoch {epoch:02d} [{current_dataset}] | "
+                       f"Train: L={train_metrics['loss']:.4f} Acc={train_metrics['accuracy']:.3f} F1={train_metrics['f1']:.3f} T1={train_metrics['top1_accuracy']:.3f} | "
+                       f"Val: L={val_metrics['loss']:.4f} Acc={val_metrics['accuracy']:.3f} F1={val_metrics['f1']:.3f} T1={val_metrics['top1_accuracy']:.3f}")
+            
+            if state0_val_metrics is not None:
+                base_log += f" | State0-Val: Acc={state0_val_metrics['accuracy']:.3f} F1={state0_val_metrics['f1']:.3f} T1={state0_val_metrics['top1_accuracy']:.3f}"
+            
+            base_log += f" | LR={current_lr:.1e} | {'🎯F1' if is_best_f1 else ''}{'🎯T1' if is_best_top1 else ''}"
+            print(base_log)
         
         print(f"\nHETEROGENEOUS Training completed!")
         print(f"Best validation F1: {best_val_f1:.4f} (epoch {best_epoch})")
         print(f"Best validation Top-1 Accuracy: {best_val_top1:.4f} (epoch {best_top1_epoch})")
-        print(f"📊 Edge type specialization should improve constraint reasoning")
+        print(f"📊 Mixed training should improve early-game performance while preserving multi-state knowledge")
         
         return model, best_val_f1
     
