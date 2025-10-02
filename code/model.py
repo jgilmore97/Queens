@@ -276,3 +276,281 @@ class HeteroGAT(nn.Module):
         print("Edge types:", list(edge_index_dict.keys()))
         
         return attention_weights
+
+# ======================================================================
+# HRM-style hierarchical reasoning model
+# Inspired by "Hierarchical Reasoning Model" (Wang et al., 2025)
+# Two-level architecture: L-module (fast local) + H-module (slow global)
+# ======================================================================
+
+class _RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization"""
+    def __init__(self, d, eps=1e-6):
+        super().__init__()
+        self.scale = nn.Parameter(torch.ones(d))
+        self.eps = eps
+    
+    def forward(self, x):
+        return self.scale * x * (x.pow(2).mean(dim=-1, keepdim=True).add(self.eps).rsqrt())
+
+
+class _InitialEmbed(nn.Module):
+    """Initial embedding layer: projects input features to hidden_dim"""
+    def __init__(self, in_dim: int, hidden_dim: int, p_drop: float):
+        super().__init__()
+        self.proj = nn.Linear(in_dim, hidden_dim)
+        self.norm = _RMSNorm(hidden_dim)
+        self.drop = nn.Dropout(p_drop)
+    
+    def forward(self, x_cell):
+        h = torch.nn.functional.gelu(self.proj(x_cell))
+        return self.drop(self.norm(h))
+
+
+class _FiLM(nn.Module):
+    """Feature-wise Linear Modulation: conditions node features on global z_H"""
+    def __init__(self, hidden_dim: int):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_dim, 2 * hidden_dim),
+            nn.GELU(),
+            nn.Linear(2 * hidden_dim, 2 * hidden_dim),
+        )
+    
+    def forward(self, nodes, z_h):
+        gamma, beta = self.mlp(z_h).chunk(2, dim=-1)
+        return gamma * nodes + beta
+
+
+class _LBlock(nn.Module):
+    """
+    L-module: One weight-tied micro-step
+    Architecture: GAT -> GAT -> HGT with FiLM conditioning from z_H
+    """
+    def __init__(
+        self,
+        hidden_dim: int,
+        gat_heads: int,
+        hgt_heads: int,
+        dropout: float,
+        use_batch_norm: bool,
+        edge_types,
+        use_input_injection: bool,
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.drop = nn.Dropout(dropout)
+        self.relu = nn.LeakyReLU(0.2)
+        self.use_bn = use_batch_norm
+        self.use_input_injection = use_input_injection
+
+        gat_head_dim = hidden_dim // max(1, gat_heads)
+        assert hidden_dim % max(1, gat_heads) == 0, "hidden_dim must be divisible by gat_heads"
+
+        # Two heterogeneous GAT layers
+        self.hconv1 = HeteroConv({
+            et: pyg_nn.GATConv(
+                in_channels=hidden_dim,
+                out_channels=gat_head_dim,
+                heads=gat_heads,
+                concat=True,
+                dropout=dropout,
+                add_self_loops=True,
+            ) for et in edge_types
+        }, aggr='sum')
+
+        self.hconv2 = HeteroConv({
+            et: pyg_nn.GATConv(
+                in_channels=hidden_dim,
+                out_channels=gat_head_dim,
+                heads=gat_heads,
+                concat=True,
+                dropout=dropout,
+                add_self_loops=True,
+            ) for et in edge_types
+        }, aggr='sum')
+
+        self.bn1 = nn.BatchNorm1d(hidden_dim) if self.use_bn else None
+        self.bn2 = nn.BatchNorm1d(hidden_dim) if self.use_bn else None
+
+        # Heterogeneous global context layer
+        self.hgt = HGTConv(
+            in_channels=hidden_dim,
+            out_channels=hidden_dim,
+            metadata=(['cell'], edge_types),
+            heads=hgt_heads
+        )
+        self.bn_hgt = nn.BatchNorm1d(hidden_dim) if self.use_bn else None
+
+        # Input injection (embedded input -> hidden)
+        if self.use_input_injection:
+            self.input_proj = nn.Linear(hidden_dim, hidden_dim)
+
+        # FiLM conditioning from z_H
+        self.film = _FiLM(hidden_dim)
+
+    def _res_block(self, x_old, x_new, bn):
+        if bn is not None:
+            x_new = bn(x_new)
+        return self.relu(x_old + self.drop(x_new))
+
+    def forward(self, x_cell, edge_index_dict, z_h, x_cell_embedded=None):
+        """
+        x_cell: [C, d] current node states
+        edge_index_dict: hetero edges
+        z_h: [d] global vector (fixed during this micro-step)
+        x_cell_embedded: [C, d] embedded original input for injection
+        """
+        x_dict = {'cell': x_cell}
+
+        # GAT layer 1
+        x1 = self.hconv1(x_dict, edge_index_dict)['cell']
+        x1 = self._res_block(x_cell, x1, self.bn1)
+
+        # GAT layer 2
+        x2 = self.hconv2({'cell': x1}, edge_index_dict)['cell']
+        x2 = self._res_block(x1, x2, self.bn2)
+
+        # HGT global context
+        x3 = self.hgt({'cell': x2}, edge_index_dict)['cell']
+        if self.bn_hgt is not None:
+            x3 = self.bn_hgt(x3)
+        x3 = self._res_block(x2, x3, None)
+
+        # Input injection (embedded input)
+        if self.use_input_injection and x_cell_embedded is not None:
+            x3 = x3 + self.input_proj(x_cell_embedded)
+
+        # FiLM conditioning with z_H
+        x3 = self.film(x3, z_h)
+        return x3
+
+
+class _HModule(nn.Module):
+    """H-module: Updates global context vector z_H from pooled node states"""
+    def __init__(self, hidden_dim: int, dropout: float):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(2 * hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        self.norm = _RMSNorm(hidden_dim)
+    
+    def forward(self, pooled_nodes, z_prev):
+        z = torch.cat([pooled_nodes, z_prev], dim=-1)
+        return self.norm(self.mlp(z))
+
+
+class _Readout(nn.Module):
+    """Readout: per-cell logits conditioned on global z_H"""
+    def __init__(self, hidden_dim: int, dropout: float):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(2 * hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
+        )
+    
+    def forward(self, nodes, z_h):
+        z_tiled = z_h.unsqueeze(0).expand_as(nodes)
+        return self.mlp(torch.cat([nodes, z_tiled], dim=-1)).squeeze(-1)
+
+
+class HRM(nn.Module):
+    """
+    Hierarchical Reasoning Model for Queens puzzle
+    
+    Architecture:
+    - L-module: Weight-tied recurrent block (GAT->GAT->HGT)
+    - H-module: Global state manager (mean pool -> MLP)
+    - Hierarchical convergence: L converges locally, H updates context
+    
+    Based on "Hierarchical Reasoning Model" (Wang et al., 2025)
+    """
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int = 128,
+        gat_heads: int = 2,
+        hgt_heads: int = 6,
+        dropout: float = 0.10,
+        use_batch_norm: bool = True,
+        n_cycles: int = 2,
+        t_micro: int = 2,
+        use_input_injection: bool = True,
+        z_init: str = "zeros",
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.n_cycles = n_cycles
+        self.t_micro = t_micro
+        self.use_input_injection = use_input_injection
+
+        self.edge_types = [
+            ('cell', 'line_constraint', 'cell'),
+            ('cell', 'region_constraint', 'cell'),
+            ('cell', 'diagonal_constraint', 'cell')
+        ]
+
+        print(f"HRM configured:")
+        print(f"  Cycles (H-updates): {n_cycles}")
+        print(f"  Micro-steps per cycle: {t_micro}")
+        print(f"  Total L-steps: {n_cycles * t_micro}")
+        print(f"  GAT heads: {gat_heads}, HGT heads: {hgt_heads}")
+        print(f"  Input injection: {use_input_injection}")
+
+        # Modules
+        self.embed = _InitialEmbed(input_dim, hidden_dim, dropout)
+        self.l_block = _LBlock(
+            hidden_dim=hidden_dim,
+            gat_heads=gat_heads,
+            hgt_heads=hgt_heads,
+            dropout=dropout,
+            use_batch_norm=use_batch_norm,
+            edge_types=self.edge_types,
+            use_input_injection=use_input_injection,
+        )
+        self.h_mod = _HModule(hidden_dim, dropout)
+        self.readout = _Readout(hidden_dim, dropout)
+
+        # z_H initialization
+        if z_init == "learned":
+            self.z0 = nn.Parameter(torch.randn(hidden_dim) * 0.02)
+        else:
+            self.register_buffer("z0", torch.zeros(hidden_dim), persistent=False)
+
+    @torch.no_grad()
+    def _pooled_mean(self, nodes):
+        return nodes.mean(dim=0)
+
+    def forward(self, x_dict, edge_index_dict):
+        """
+        x_dict: {'cell': [C, input_dim]}
+        edge_index_dict: hetero edges
+        Returns: logits [C]
+        """
+        x_in = x_dict['cell']
+        nodes_embedded = self.embed(x_in)
+        nodes = nodes_embedded
+        z = self.z0
+
+        for _ in range(self.n_cycles):
+            # L micro-steps (weight-tied)
+            for __ in range(self.t_micro):
+                nodes = self.l_block(
+                    nodes, 
+                    edge_index_dict, 
+                    z, 
+                    x_cell_embedded=nodes_embedded if self.use_input_injection else None
+                )
+
+            # H update
+            pooled = self._pooled_mean(nodes)
+            z = self.h_mod(pooled, z)
+
+        # Final readout conditioned on z_H
+        logits = self.readout(nodes, z)
+        return logits

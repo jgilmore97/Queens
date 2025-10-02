@@ -16,28 +16,51 @@ def load_model(model_path: str, config: Config, use_heterogeneous: bool = True):
     """Load trained model from checkpoint."""
     checkpoint = torch.load(model_path, map_location=config.system.device, weights_only=False)
     
-    if use_heterogeneous:
+    # Check if HRM
+    model_config = checkpoint.get('config_dict', {})
+    is_hrm = model_config.get('model_type') == 'HRM' or 'n_cycles' in model_config
+    
+    if is_hrm:
+        from model import HRM
+        model = HRM(
+            input_dim=model_config['input_dim'],
+            hidden_dim=model_config['hidden_dim'],
+            gat_heads=model_config.get('gat_heads', 2),
+            hgt_heads=model_config.get('hgt_heads', 6),
+            dropout=model_config.get('dropout', 0.2),
+            use_batch_norm=True,
+            n_cycles=model_config.get('n_cycles', 2),
+            t_micro=model_config.get('t_micro', 2),
+            use_input_injection=model_config.get('use_input_injection', True),
+            z_init=model_config.get('z_init', 'zeros'),
+        )
+        print(f"Loaded HRM model (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)})")
+    elif use_heterogeneous:
+        from model import HeteroGAT
         model = HeteroGAT(
             input_dim=config.model.input_dim,
             hidden_dim=config.model.hidden_dim,
             layer_count=config.model.layer_count,
             dropout=config.model.dropout,
-            heads=config.model.heads
+            gat_heads=config.model.gat_heads,
+            hgt_heads=config.model.hgt_heads
         )
+        print(f"Loaded Heterogeneous GAT model")
     else:
+        from model import GAT
         model = GAT(
             input_dim=config.model.input_dim,
             hidden_dim=config.model.hidden_dim,
             layer_count=config.model.layer_count,
             dropout=config.model.dropout,
-            heads=config.model.heads
+            heads=config.model.gat_heads
         )
+        print(f"Loaded Homogeneous GAT model")
     
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to(config.system.device)
     model.eval()
     
-    print(f"Loaded {'Heterogeneous' if use_heterogeneous else 'Homogeneous'} GAT model")
     return model
 
 def get_batch_indices_hetero(batch, device):

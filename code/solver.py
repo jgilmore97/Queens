@@ -462,21 +462,41 @@ def load_solver(model_path: str, device: str = "cuda") -> ModelEnabledQueensSolv
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     model_config = checkpoint['config_dict']
     
-    # Create model
-    model = HeteroGAT(
-        input_dim=model_config['input_dim'],
-        hidden_dim=model_config['hidden_dim'],
-        layer_count=model_config['layer_count'],
-        dropout=model_config['dropout'],
-        gat_heads=model_config['gat_heads'],
-        hgt_heads=model_config['hgt_heads']
-    )
+    # Check if HRM
+    is_hrm = model_config.get('model_type') == 'HRM' or 'n_cycles' in model_config
+    
+    if is_hrm:
+        from model import HRM
+        model = HRM(
+            input_dim=model_config['input_dim'],
+            hidden_dim=model_config['hidden_dim'],
+            gat_heads=model_config.get('gat_heads', 2),
+            hgt_heads=model_config.get('hgt_heads', 6),
+            dropout=model_config.get('dropout', 0.2),
+            use_batch_norm=True,
+            n_cycles=model_config.get('n_cycles', 2),
+            t_micro=model_config.get('t_micro', 2),
+            use_input_injection=model_config.get('use_input_injection', True),
+            z_init=model_config.get('z_init', 'zeros'),
+        )
+        print(f"Loaded HRM solver (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)})")
+    else:
+        from model import HeteroGAT
+        model = HeteroGAT(
+            input_dim=model_config['input_dim'],
+            hidden_dim=model_config['hidden_dim'],
+            layer_count=model_config['layer_count'],
+            dropout=model_config['dropout'],
+            gat_heads=model_config['gat_heads'],
+            hgt_heads=model_config['hgt_heads']
+        )
+        print(f"Loaded HeteroGAT solver")
     
     # Load weights
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to(device)
     
-    print(f"Loaded enhanced solver with model from epoch {checkpoint['epoch']}")
+    print(f"Model loaded from epoch {checkpoint['epoch']}")
     print(f"Model config: {model_config}")
     
     return ModelEnabledQueensSolver(model, device)

@@ -2,7 +2,7 @@ import os
 import torch
 from pathlib import Path
 
-from train import run_training_with_tracking, FocalLoss, run_training_with_tracking_hetero, train_epoch_hetero, evaluate_epoch_hetero, calculate_top1_metrics_hetero
+from train import run_training_with_tracking, FocalLoss, run_training_with_tracking_hetero, train_epoch_hetero, evaluate_epoch_hetero, calculate_top1_metrics_hetero, run_training_with_tracking_hrm
 from model import GAT, HeteroGAT
 from data_loader import get_queens_loaders, QueensDataset
 from config import Config, BASELINE_CONFIG, HYPEROPT_CONFIG
@@ -101,6 +101,92 @@ def main_heterogeneous_training():
     except Exception as e:
         print(f"\n Training failed with error: {e}")
         raise
+
+def main_hrm_training():
+    """Main training function with HRM model."""
+    
+    set_seed(42)
+    
+    hrm_config = Config(**BASELINE_CONFIG)
+    
+    # Override for HRM
+    hrm_config.model.model_type = "HRM"
+    hrm_config.model.n_cycles = 2
+    hrm_config.model.t_micro = 2
+    hrm_config.model.use_input_injection = True
+    hrm_config.model.z_init = "zeros"
+    
+    hrm_config.experiment.experiment_name = "HRM_baseline_v1"
+    hrm_config.experiment.tags = ["hrm", "hierarchical", "reasoning"]
+    hrm_config.experiment.notes = "HRM model with 2 cycles, 2 micro-steps, hierarchical convergence"
+    
+    print("=== Queens Puzzle ML Training - HRM ===")
+    print(f"Device: {hrm_config.system.device}")
+    print(f"Experiment: {hrm_config.experiment.experiment_name}")
+    print("Using Hierarchical Reasoning Model (HRM)")
+    
+    # Load data
+    print("\nLoading datasets...")
+    train_loader, val_loader = get_queens_loaders(
+        hrm_config.data.train_json,
+        batch_size=hrm_config.training.batch_size,
+        val_ratio=hrm_config.training.val_ratio,
+        seed=hrm_config.data.seed,
+        num_workers=hrm_config.data.num_workers,
+        pin_memory=hrm_config.data.pin_memory,
+        shuffle_train=hrm_config.data.shuffle_train,
+    )
+    
+    print(f"Train samples: {len(train_loader.dataset):,}")
+    print(f"Val samples: {len(val_loader.dataset):,}")
+    
+    # Create HRM model
+    from model import HRM
+    
+    print(f"\nCreating HRM model...")
+    model = HRM(
+        input_dim=hrm_config.model.input_dim,
+        hidden_dim=hrm_config.model.hidden_dim,
+        gat_heads=hrm_config.model.gat_heads,
+        hgt_heads=hrm_config.model.hgt_heads,
+        dropout=hrm_config.model.dropout,
+        use_batch_norm=True,
+        n_cycles=hrm_config.model.n_cycles,
+        t_micro=hrm_config.model.t_micro,
+        use_input_injection=hrm_config.model.use_input_injection,
+        z_init=hrm_config.model.z_init,
+    )
+    
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+    
+    print(f"\nStarting HRM training for {hrm_config.training.epochs} epochs...")
+    
+    try:
+        model, best_f1 = run_training_with_tracking_hrm(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            config=hrm_config
+        )
+        
+        print(f"\nHRM training completed! Best validation F1: {best_f1:.4f}")
+        return model, best_f1
+        
+    except KeyboardInterrupt:
+        print("\nTraining interrupted by user")
+        return None, 0.0
+    except Exception as e:
+        print(f"\nTraining failed with error: {e}")
+        raise
+
+
+# Helper function
+def run_hrm_baseline():
+    """Run the HRM baseline experiment."""
+    return main_hrm_training()
 
 def compare_homogeneous_vs_heterogeneous():
     """Run both homogeneous and heterogeneous models for comparison."""

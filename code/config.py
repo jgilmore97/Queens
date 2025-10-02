@@ -27,16 +27,25 @@ class ModelConfig:
     """Model architecture configuration."""
     input_dim: int = 14
     hidden_dim: int = 128
-    layer_count: int = 6
+    layer_count: int = 6  # Used by GAT/HeteroGAT only
     dropout: float = 0.2
     
     # Separate head configurations
-    gat_heads: int = 2      # For constraint-specific attention in GAT layers
-    hgt_heads: int = 4      # For global context attention in HGT layers
+    gat_heads: int = 2
+    hgt_heads: int = 4
     
-    input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])
-    model_type: str = "HeteroGAT" # "GAT", "HeteroGAT", or "GNN"
+    # Model selection
+    model_type: str = "HRM"  # "GAT", "HeteroGAT", or "HRM"
     hetero_aggr: str = "sum"
+    
+    # HRM-specific parameters
+    n_cycles: int = 2              # Number of H-module updates
+    t_micro: int = 2               # L-module micro-steps per cycle
+    use_input_injection: bool = True
+    z_init: str = "zeros"          # "zeros" or "learned"
+    
+    # Must come last due to field() usage
+    input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])
 
 @dataclass
 class TrainingConfig:
@@ -85,7 +94,7 @@ class ExperimentConfig:
     save_model_every_n_epochs: int = 10
     
     # Paths
-    checkpoint_dir: str = "checkpoints/transformer/post_train_state0"
+    checkpoint_dir: str = "checkpoints/transformer/HRM"
     log_dir: str = "logs"
 
 @dataclass
@@ -137,9 +146,9 @@ class Config:
 # Example configurations for different experiment types
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "HeteroGAT with transformer layer - post train on state0",
-        "tags": ["heterogat", "transformer", "post-train"],
-        "notes": "Training HeteroGAT model with transformer layer, followed by additional training on state-0 dataset"
+        "experiment_name": "RUN 1 of HRM inspired Model",
+        "tags": ["HRM", "post-train"],
+        "notes": "HRM with mean pooling and no supervision"
     }
 }
 
