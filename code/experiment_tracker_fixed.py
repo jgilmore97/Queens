@@ -285,7 +285,7 @@ class ExperimentTracker:
             return pred_metrics
     
     def save_checkpoint(self, model: torch.nn.Module, optimizer, epoch: int, 
-                       metrics: Dict[str, float], is_best: bool = False):
+                    metrics: Dict[str, float], is_best: bool = False):
         """Save model checkpoint locally."""
         checkpoint = {
             'epoch': epoch,
@@ -300,6 +300,11 @@ class ExperimentTracker:
                 "dropout": self.config.model.dropout,
                 "gat_heads": self.config.model.gat_heads,
                 "hgt_heads": self.config.model.hgt_heads,
+                # HRM-specific (safe defaults for HeteroGAT compatibility)
+                "n_cycles": getattr(self.config.model, 'n_cycles', 2),
+                "t_micro": getattr(self.config.model, 't_micro', 2),
+                "use_input_injection": getattr(self.config.model, 'use_input_injection', True),
+                "z_init": getattr(self.config.model, 'z_init', 'zeros'),
             }
         }
         
