@@ -39,12 +39,12 @@ class ModelConfig:
     hetero_aggr: str = "sum"
     
     # HRM-specific parameters
-    n_cycles: int = 2              # Number of H-module updates
+    n_cycles: int = 3              # Number of H-module updates
     t_micro: int = 2               # L-module micro-steps per cycle
     use_input_injection: bool = True
     z_init: str = "zeros"          # "zeros" or "learned"
+    h_pooling_heads: int = 4  # Number of attention heads for H-module pooling
     
-    # Must come last due to field() usage
     input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])
 
 @dataclass
@@ -146,9 +146,9 @@ class Config:
 # Example configurations for different experiment types
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "RUN 1 of HRM inspired Model",
-        "tags": ["HRM", "post-train"],
-        "notes": "HRM with mean pooling and no supervision"
+        "experiment_name": "RUN 3 of HRM inspired Model - add attention based h pooling, increase cycles",
+        "tags": ["HRM", "post-train", "attention pooling"],
+        "notes": "HRM with attention-based H-module pooling"
     }
 }
 

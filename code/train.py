@@ -955,7 +955,6 @@ def run_training_with_tracking_hrm(model, train_loader, val_loader, config, resu
         
         for epoch in range(1, config.training.epochs + 1):
             # Dataset switching logic
-            
             if epoch == config.training.switch_epoch and mixed_train_loader is None:
                 print(f"\n🔄 Switching to mixed dataset at epoch {epoch}")
                 print(f"Loading state-0 dataset from {config.training.state0_json_path}")
@@ -993,7 +992,7 @@ def run_training_with_tracking_hrm(model, train_loader, val_loader, config, resu
                     batch_size=config.training.batch_size // 2,
                     num_workers=config.data.num_workers,
                     pin_memory=config.data.pin_memory,
-                    shuffle=True,  # Still shuffle the order samples are drawn
+                    shuffle=True,
                     follow_batch=[]
                 )
                 
@@ -1023,7 +1022,7 @@ def run_training_with_tracking_hrm(model, train_loader, val_loader, config, resu
                 active_train_loader = train_loader
                 current_dataset = "multi-state"
             
-            # Training/Eval (same pattern as hetero path)
+            # Training/Eval
             train_metrics = train_epoch_hetero(model, active_train_loader, criterion, optimizer, device, epoch)
             val_metrics = evaluate_epoch_hetero(model, val_loader, criterion, device, epoch)
             
@@ -1065,8 +1064,7 @@ def run_training_with_tracking_hrm(model, train_loader, val_loader, config, resu
                 best_top1_epoch = epoch
             
             tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_f1 or is_best_top1)
-            
-            # Logging (same style as hetero)
+
             base_log = (f"Epoch {epoch:02d} [{current_dataset}] | "
                        f"Train: L={train_metrics['loss']:.4f} Acc={train_metrics['accuracy']:.3f} P={train_metrics['precision']:.3f} "
                        f"R={train_metrics['recall']:.3f} F1={train_metrics['f1']:.3f} T1={train_metrics['top1_accuracy']:.3f} | "
