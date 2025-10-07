@@ -427,9 +427,21 @@ class _LBlock(nn.Module):
 
 
 class _HModule(nn.Module):
-    """H-module: Updates global context vector z_H from pooled node states"""
-    def __init__(self, hidden_dim: int, dropout: float):
+    """H-module with multi-head attention pooling"""
+    def __init__(self, hidden_dim: int, dropout: float, num_heads: int = 4):
         super().__init__()
+        self.hidden_dim = hidden_dim
+        self.num_heads = num_heads
+        self.head_dim = hidden_dim // num_heads
+        
+        assert hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
+        
+        # Multi-head attention for pooling
+        self.query = nn.Linear(hidden_dim, hidden_dim)  # z_prev -> queries
+        self.key = nn.Linear(hidden_dim, hidden_dim)    # nodes -> keys
+        self.value = nn.Linear(hidden_dim, hidden_dim)  # nodes -> values
+        
+        # MLP to update z_H
         self.mlp = nn.Sequential(
             nn.Linear(2 * hidden_dim, hidden_dim),
             nn.GELU(),
@@ -438,9 +450,29 @@ class _HModule(nn.Module):
         )
         self.norm = _RMSNorm(hidden_dim)
     
-    def forward(self, pooled_nodes, z_prev):
-        z = torch.cat([pooled_nodes, z_prev], dim=-1)
-        return self.norm(self.mlp(z))
+    def forward(self, nodes, z_prev):
+        """
+        nodes: [C, d] - all node states
+        z_prev: [d] - previous global state
+        """
+        C, d = nodes.shape
+        
+        # Generate Q, K, V
+        Q = self.query(z_prev).view(1, self.num_heads, self.head_dim)  # [1, H, d/H]
+        K = self.key(nodes).view(C, self.num_heads, self.head_dim)     # [C, H, d/H]
+        V = self.value(nodes).view(C, self.num_heads, self.head_dim)   # [C, H, d/H]
+        
+        # Compute attention scores per head
+        attn_scores = torch.einsum('qhd,chd->hc', Q, K) / (self.head_dim ** 0.5)  # [H, C]
+        attn_weights = torch.softmax(attn_scores, dim=-1)  # [H, C]
+        
+        # Weighted sum of values per head
+        pooled_heads = torch.einsum('hc,chd->hd', attn_weights, V)  # [H, d/H]
+        pooled = pooled_heads.reshape(self.hidden_dim)  # [d]
+        
+        # Update z_H
+        z = torch.cat([pooled, z_prev], dim=-1)  # [2d]
+        return self.norm(self.mlp(z))  # [d]
 
 
 class _Readout(nn.Module):
@@ -465,7 +497,7 @@ class HRM(nn.Module):
     
     Architecture:
     - L-module: Weight-tied recurrent block (GAT->GAT->HGT)
-    - H-module: Global state manager (mean pool -> MLP)
+    - H-module: Global state manager with multi-head attention pooling
     - Hierarchical convergence: L converges locally, H updates context
     
     Based on "Hierarchical Reasoning Model" (Wang et al., 2025)
@@ -482,6 +514,7 @@ class HRM(nn.Module):
         t_micro: int = 2,
         use_input_injection: bool = True,
         z_init: str = "zeros",
+        h_pooling_heads: int = 4,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -500,6 +533,7 @@ class HRM(nn.Module):
         print(f"  Micro-steps per cycle: {t_micro}")
         print(f"  Total L-steps: {n_cycles * t_micro}")
         print(f"  GAT heads: {gat_heads}, HGT heads: {hgt_heads}")
+        print(f"  H-pooling heads: {h_pooling_heads}")
         print(f"  Input injection: {use_input_injection}")
 
         # Modules
@@ -513,7 +547,7 @@ class HRM(nn.Module):
             edge_types=self.edge_types,
             use_input_injection=use_input_injection,
         )
-        self.h_mod = _HModule(hidden_dim, dropout)
+        self.h_mod = _HModule(hidden_dim, dropout, num_heads=h_pooling_heads)
         self.readout = _Readout(hidden_dim, dropout)
 
         # z_H initialization
@@ -521,10 +555,6 @@ class HRM(nn.Module):
             self.z0 = nn.Parameter(torch.randn(hidden_dim) * 0.02)
         else:
             self.register_buffer("z0", torch.zeros(hidden_dim), persistent=False)
-
-    @torch.no_grad()
-    def _pooled_mean(self, nodes):
-        return nodes.mean(dim=0)
 
     def forward(self, x_dict, edge_index_dict):
         """
@@ -547,9 +577,8 @@ class HRM(nn.Module):
                     x_cell_embedded=nodes_embedded if self.use_input_injection else None
                 )
 
-            # H update
-            pooled = self._pooled_mean(nodes)
-            z = self.h_mod(pooled, z)
+            # H update with attention pooling
+            z = self.h_mod(nodes, z)
 
         # Final readout conditioned on z_H
         logits = self.readout(nodes, z)

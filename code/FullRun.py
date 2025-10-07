@@ -27,18 +27,7 @@ def main_heterogeneous_training():
     
     set_seed(42)
     
-    # Create config for heterogeneous experiment
     hetero_config = Config(**BASELINE_CONFIG)
-    
-    # Override specific settings
-    # hetero_config.data.train_json = "10k_training_set_with_states.json"
-    # hetero_config.data.test_json = "test_set_with_states.json"
-    # hetero_config.training.epochs = 30
-    # hetero_config.training.batch_size = 512
-    
-    # hetero_config.experiment.experiment_name = "hetero_gat_v1"
-    # hetero_config.experiment.tags = ["heterogeneous", "gat", "focal_loss", "multi_constraint"]
-    # hetero_config.experiment.notes = "Heterogeneous GAT with separate edge types for line/region/diagonal constraints"
     
     print("=== Queens Puzzle ML Training - HETEROGENEOUS ===")
     print(f"Device: {hetero_config.system.device}")
@@ -64,7 +53,6 @@ def main_heterogeneous_training():
     print(f"\n Creating HETEROGENEOUS {hetero_config.model.model_type} model...")
     print("Edge types: line_constraint, region_constraint, diagonal_constraint")
     
-    # Create heterogeneous model
     model = HeteroGAT(
         input_dim=hetero_config.model.input_dim,
         hidden_dim=hetero_config.model.hidden_dim,
@@ -108,18 +96,7 @@ def main_hrm_training():
     set_seed(42)
     
     hrm_config = Config(**BASELINE_CONFIG)
-    
-    # Override for HRM
-    hrm_config.model.model_type = "HRM"
-    hrm_config.model.n_cycles = 2
-    hrm_config.model.t_micro = 2
-    hrm_config.model.use_input_injection = True
-    hrm_config.model.z_init = "zeros"
-    
-    hrm_config.experiment.experiment_name = "HRM_baseline_v1"
-    hrm_config.experiment.tags = ["hrm", "hierarchical", "reasoning"]
-    hrm_config.experiment.notes = "HRM model with 2 cycles, 2 micro-steps, hierarchical convergence"
-    
+ 
     print("=== Queens Puzzle ML Training - HRM ===")
     print(f"Device: {hrm_config.system.device}")
     print(f"Experiment: {hrm_config.experiment.experiment_name}")
@@ -182,8 +159,6 @@ def main_hrm_training():
         print(f"\nTraining failed with error: {e}")
         raise
 
-
-# Helper function
 def run_hrm_baseline():
     """Run the HRM baseline experiment."""
     return main_hrm_training()
@@ -196,10 +171,9 @@ def compare_homogeneous_vs_heterogeneous():
     
     set_seed(42)
     
-    # Shared config
     config = Config(**BASELINE_CONFIG)
     config.data.train_json = "10k_training_set_with_states.json"
-    config.training.epochs = 20  # Shorter for comparison
+    config.training.epochs = 20
     config.training.batch_size = 512
     
     # Load data once
@@ -351,7 +325,6 @@ def debug_hetero_data():
     print(f"Batch type: {type(batch)}")
     print(f"Batch attributes: {dir(batch)}")
     
-    # Check heterogeneous structure
     if hasattr(batch, '__getitem__'):
         print("\nTrying to access heterogeneous structure...")
         try:
