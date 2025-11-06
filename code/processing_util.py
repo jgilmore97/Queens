@@ -11,7 +11,6 @@ from typing import Dict, List, Tuple, Any, Optional
 import numpy as np
 from tqdm import tqdm
 
-# Import board_manipulation functions
 from board_manipulation import (
     extract, solve_queens, hash_board, expand_board_dataset,
     rotate_board_data, generate_training_states, save_stateless_dataset_json
@@ -61,13 +60,11 @@ def process_puzzle_images(
         "processing_time_seconds": 0,
     }
 
-    # Create output directory if it doesn't exist
     output_dir = os.path.dirname(output_path)
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
         logger.info(f"Created output directory: {output_dir}")
 
-    # Get all JPG files in the folder
     image_files = []
     for ext in ['.jpg', '.jpeg', '.JPG', '.JPEG']:
         image_files.extend(list(Path(images_folder).glob(f"*{ext}")))
