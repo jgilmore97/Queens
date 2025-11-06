@@ -1,198 +1,196 @@
 import os
+import sys
+import time
+import logging
+import json
 from pathlib import Path
+from collections import deque
+from datetime import datetime
+from typing import Dict, List, Tuple, Any, Optional
+
+import numpy as np
 from tqdm import tqdm
+
+# Import board_manipulation functions
 from board_manipulation import (
-    extract,
-    solve_queens,
-    expand_board_dataset,
-    rotate_board_data,
-    generate_training_states,
-    save_state_dataset_to_json,
-    save_stateless_dataset_json
+    extract, solve_queens, hash_board, expand_board_dataset,
+    rotate_board_data, generate_training_states, save_stateless_dataset_json
 )
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 def process_puzzle_images(
-    image_folder: str,
-    destination: str,
+    images_folder: str,
+    output_path: str,
     augment: bool = False,
     gen_count: int = 0,
     rotate: bool = False,
-    include_states: bool = True,
-    state_0_only: bool = False
-):
+    make_states: bool = False
+) -> Dict[str, Any]:
     """
-    Process Queens puzzle images into training/test data.
-    
+    Process a folder of Queens puzzle images into a standardized dataset.
+
     Args:
-        image_folder: Path to folder containing puzzle images (.jpg, .png)
-        destination: Path where final JSON will be saved
-        augment: If True, generate new boards via mutation using images as seeds
-        gen_count: Number of boards to generate if augment=True (ignored if augment=False)
-        rotate: If True, create 4 rotational variants of each board
-        include_states: If True, create state sequences; if False, just board/solution
-        state_0_only: If True and include_states=True, only create state 0 (empty board)
-    
+        images_folder: Absolute path to folder containing JPG images
+        output_path: Complete path with filename for output JSON
+        augment: Whether to generate new boards through mutation
+        gen_count: How many boards to generate if augmenting
+        rotate: Whether to create rotated variations
+        make_states: Whether to generate training states
+
     Returns:
-        None (saves JSON to destination)
-    
-    Example:
-        # Create test set from images (no augmentation, just extract and solve)
-        process_puzzle_images(
-            image_folder="test_puzzles/",
-            destination="test_set.json",
-            augment=False,
-            rotate=False,
-            include_states=False
-        )
-        
-        # Create training set with full augmentation
-        process_puzzle_images(
-            image_folder="seed_puzzles/",
-            destination="training_set_with_states.json",
-            augment=True,
-            gen_count=5000,
-            rotate=True,
-            include_states=True,
-            state_0_only=False
-        )
-        
-        # Create state-0 fine-tuning dataset
-        process_puzzle_images(
-            image_folder="seed_puzzles/",
-            destination="state0_training.json",
-            augment=True,
-            gen_count=10000,
-            rotate=True,
-            include_states=True,
-            state_0_only=True
-        )
+        Dict with statistics about the processing operation
     """
+    start_time = time.time()
+    stats = {
+        "total_images": 0,
+        "successful_extractions": 0,
+        "failed_extractions": 0,
+        "successful_solutions": 0,
+        "failed_solutions": 0,
+        "augmented_boards": 0,
+        "rotated_boards": 0,
+        "training_states": 0,
+        "total_boards_in_output": 0,
+        "processing_time_seconds": 0,
+    }
+
+    # Create output directory if it doesn't exist
+    output_dir = os.path.dirname(output_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        logger.info(f"Created output directory: {output_dir}")
+
+    # Get all JPG files in the folder
+    image_files = []
+    for ext in ['.jpg', '.jpeg', '.JPG', '.JPEG']:
+        image_files.extend(list(Path(images_folder).glob(f"*{ext}")))
     
-    # Validate inputs
-    image_folder = Path(image_folder)
-    if not image_folder.exists():
-        raise ValueError(f"Image folder does not exist: {image_folder}")
-    
-    destination = Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    
-    print("="*60)
-    print("Queens Puzzle Image Processing Pipeline")
-    print("="*60)
-    print(f"Input: {image_folder}")
-    print(f"Output: {destination}")
-    print(f"Augment: {augment} (count={gen_count if augment else 'N/A'})")
-    print(f"Rotate: {rotate}")
-    print(f"States: {include_states} (state_0_only={state_0_only if include_states else 'N/A'})")
-    print("="*60)
-    
-    print("\nExecution plan:")
-    print(f"Extract tensors: [X]")
-    print(f"Solve puzzles: [X]")
-    print(f"Generate new puzzles: [{'X' if augment and gen_count > 0 else ' '}]")
-    print(f"Rotate boards: [{'X' if rotate else ' '}]")
-    print(f"Make states: [{'X' if include_states else ' '}]")
-    print("="*60)
-    
-    # STEP 1: Extract and solve all images
-    print("\n" + "="*60)
-    print("Step 1/5: Extract boards from images")
-    print("="*60)
-    image_files = [f for f in image_folder.iterdir()]
-    
-    print(f"Found {len(image_files)} images")
-    
+    stats["total_images"] = len(image_files)
+    logger.info(f"Found {stats['total_images']} image files in {images_folder}")
+
+    if stats["total_images"] == 0:
+        logger.warning(f"No image files found in {images_folder}")
+        return stats
+
+    # Process each image and extract board data
     seed_dataset = []
-    failed_extractions = []
-    unsolvable_boards = []
     
-    for img_path in tqdm(image_files, desc="Processing", unit="image"):
+    for img_path in tqdm(image_files, desc="Extracting boards"):
         try:
-            region_board = extract(str(img_path), threshold=30)
-            positions, solution_board = solve_queens(region_board)
+            # Extract region tensor from image
+            region_tensor = extract(str(img_path))
             
-            if positions is None:
-                tqdm.write(f"Unsolvable: {img_path.name}")
-                unsolvable_boards.append(img_path.name)
-                continue
+            # Solve the board to get queen positions
+            positions, solution_board = solve_queens(region_tensor)
             
-            seed_dataset.append({
-                'region': region_board,
-                'queen_positions': positions,
-                'solution_board': solution_board,
-                'source': img_path.name, 
-                'iteration': 0
-            })
+            if positions is not None and solution_board is not None:
+                # Create board entry with proper metadata
+                board_entry = {
+                    "region": region_tensor,
+                    "queen_positions": positions,
+                    "solution_board": solution_board,
+                    "filename": img_path.name,
+                    "source": img_path.name,
+                    "iteration": 0
+                }
+                seed_dataset.append(board_entry)
+                stats["successful_solutions"] += 1
+            else:
+                logger.warning(f"No valid solution found for {img_path.name}")
+                stats["failed_solutions"] += 1
             
+            stats["successful_extractions"] += 1
         except Exception as e:
-            tqdm.write(f"Failed: {img_path.name} - {e}")
-            failed_extractions.append(img_path.name)
-            print(f"\nTerminating due to extraction failure")
-            raise
+            logger.error(f"Error processing {img_path.name}: {str(e)}")
+            stats["failed_extractions"] += 1
     
-    print(f"Extracted and solved {len(seed_dataset)} boards")
-    if unsolvable_boards:
-        print(f"Skipped {len(unsolvable_boards)} unsolvable boards")
+    logger.info(f"Successfully extracted and solved {stats['successful_solutions']} boards")
     
-    # STEP 2: Augment via mutation (optional)
-    print("\n" + "="*60)
-    print(f"Step 2/5: {'Generate new boards' if augment and gen_count > 0 else 'Skip augmentation'}")
-    print("="*60)
+    # Apply data augmentation if requested
+    dataset = []
+    
+    # Initialize dataset with properly formatted seed entries
+    # This ensures consistent format even when skipping expand_board_dataset
+    for seed in seed_dataset:
+        seed_entry = {
+            "region": seed["region"],
+            "queen_positions": seed["queen_positions"],
+            "solution_board": seed["solution_board"],
+            "source": seed["source"],
+            "iteration": 0
+        }
+        print(f'SEED NAME {seed['source']}')
+        dataset.append(seed_entry)
     
     if augment and gen_count > 0:
-        print(f"Target: {gen_count} boards")
+        logger.info(f"Generating {gen_count} new boards through mutation")
         generated_dataset, offspring_counter = expand_board_dataset(seed_dataset, target_size=gen_count)
-        print(f"Generated {len(generated_dataset)} boards")
-        all_boards = seed_dataset + generated_dataset
-    else:
-        all_boards = seed_dataset
-    
-    print(f"Total boards: {len(all_boards)}")
-    
-    # STEP 3: Rotate (optional)
-    print("\n" + "="*60)
-    print(f"Step 3/5: {'Rotate boards' if rotate else 'Skip rotation'}")
-    print("="*60)
-    
+        dataset.extend(generated_dataset)
+        stats["augmented_boards"] = len(generated_dataset)
+        logger.info(f"Generated {stats['augmented_boards']} new boards")
+
+    # Apply rotational augmentation if requested
     if rotate:
-        rotated_boards = []
-        for board_data in tqdm(all_boards, desc="Rotating", unit="board"):
-            rotated_variants = rotate_board_data(board_data)
-            rotated_boards.extend(rotated_variants)
-        all_boards = rotated_boards
+        rotated_dataset = []
+        for board in tqdm(dataset, desc="Creating rotations"):
+            rotations = rotate_board_data(board)
+            rotated_dataset.extend(rotations)
+        
+        dataset = rotated_dataset
+        stats["rotated_boards"] = len(dataset) - stats["augmented_boards"] - len(seed_dataset)
+        logger.info(f"Created {stats['rotated_boards']} rotated variations")
     
-    print(f"Total boards: {len(all_boards)}")
-    
-    # STEP 4: Generate states (optional)
-    print("\n" + "="*60)
-    print(f"Step 4/5: {'Generate states' if include_states else 'Skip states'}")
-    print("="*60)
-    
-    if include_states:
-        all_training_examples = []
-        for board_data in tqdm(all_boards, desc="Generating states", unit="board"):
-            states = generate_training_states(board_data, state_0_only=state_0_only)
-            all_training_examples.extend(states)
-        print(f"Generated {len(all_training_examples)} training examples")
+    # Generate training states if requested
+    if make_states:
+        states_dataset = []
+        for board in tqdm(dataset, desc="Generating training states"):
+            states = generate_training_states(board)
+            states_dataset.extend(states)
+        
+        dataset = states_dataset
+        stats["training_states"] = len(dataset)
+        logger.info(f"Generated {stats['training_states']} training states")
+        
+        # Save dataset with states
+        save_training_states_to_json(dataset, output_path)
     else:
-        all_training_examples = None
+        # Save regular dataset (no states)
+        save_stateless_dataset_json(dataset, output_path)
     
-    # STEP 5: Save to JSON
-    print("\n" + "="*60)
-    print("Step 5/5: Save to JSON")
-    print("="*60)
+    stats["total_boards_in_output"] = len(dataset)
+    stats["processing_time_seconds"] = time.time() - start_time
     
-    if include_states:
-        save_state_dataset_to_json(all_training_examples, str(destination))
-        final_count = len(all_training_examples)
-    else:
-        save_stateless_dataset_json(all_boards, str(destination))
-        final_count = len(all_boards)
+    logger.info(f"Data processing complete. Output saved to {output_path}")
+    logger.info(f"Total processing time: {stats['processing_time_seconds']:.2f} seconds")
     
-    print("\n" + "="*60)
-    print("Processing complete")
-    print("="*60)
-    print(f"Output: {destination}")
-    print(f"Total items: {final_count:,}")
-    print("="*60)
+    return stats
+
+def save_training_states_to_json(dataset, filename):
+    """
+    Save training states dataset to JSON.
+    Modified version of save_state_dataset_to_json for better integration.
+    """
+    serializable_data = []
+
+    for entry in dataset:
+        serializable_entry = {
+            "region": entry["region"].tolist() if isinstance(entry["region"], np.ndarray) else entry["region"],
+            "partial_board": entry["partial_board"].tolist() if isinstance(entry["partial_board"], np.ndarray) else entry["partial_board"],
+            "label_board": entry["label_board"].tolist() if isinstance(entry["label_board"], np.ndarray) else entry["label_board"],
+            "step": entry["step"],
+            "source": entry.get("source", "unknown"),
+            "iteration": entry.get("iteration", 0)
+        }
+        serializable_data.append(serializable_entry)
+
+    with open(filename, "w") as f:
+        json.dump(serializable_data, f)
+
+    logger.info(f"Saved {len(serializable_data)} training state examples to {filename}")
