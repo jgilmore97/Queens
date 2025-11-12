@@ -85,14 +85,14 @@ def process_puzzle_images(
             region_tensor = extract(str(img_path))
             
             # Solve the board to get queen positions
-            positions, solution_board = solve_queens(region_tensor)
+            positions, label_board = solve_queens(region_tensor)
             
-            if positions is not None and solution_board is not None:
+            if positions is not None and label_board is not None:
                 # Create board entry with proper metadata
                 board_entry = {
                     "region": region_tensor,
                     "queen_positions": positions,
-                    "solution_board": solution_board,
+                    "label_board": label_board,
                     "filename": img_path.name,
                     "source": img_path.name,
                     "iteration": 0
@@ -119,7 +119,7 @@ def process_puzzle_images(
         seed_entry = {
             "region": seed["region"],
             "queen_positions": seed["queen_positions"],
-            "solution_board": seed["solution_board"],
+            "label_board": seed["label_board"],
             "source": seed["source"],
             "iteration": 0
         }

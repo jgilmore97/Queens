@@ -31,11 +31,11 @@ class GAT(nn.Module):
 
     Parameters
     ----------
-    input_dim   : int   — node-feature dimension (4 for your board encoding).
-    hidden_dim  : int   — total hidden size after concatenating all heads.
-    layer_count : int   — number of GAT layers (≥ 2).
-    dropout     : float — dropout prob applied after each attention layer.
-    heads       : int   — number of attention heads per layer.
+    input_dim   : int   - node-feature dimension (4 for your board encoding).
+    hidden_dim  : int   - total hidden size after concatenating all heads.
+    layer_count : int   - number of GAT layers (>= 2).
+    dropout     : float - dropout prob applied after each attention layer.
+    heads       : int   - number of attention heads per layer.
     """
     def __init__(self, input_dim, hidden_dim, layer_count, dropout, heads=2):
         super().__init__()
@@ -113,11 +113,11 @@ class HeteroGAT(nn.Module):
         # Configure mid-sequence global context layer
         self.mid_global_layer = max(1, layer_count // 3)
         
-        print(f"🧠 HeteroGAT configured:")
-        print(f"   GAT heads: {gat_heads} (constraint-specific attention)")
-        print(f"   HGT heads: {hgt_heads} (global context attention)")
-        print(f"   Mid-global context at layer {self.mid_global_layer}/{layer_count}")
-        print(f"   Expected to reduce Type 2 errors via enhanced global reasoning")
+        print(f" HeteroGAT configured:")
+        print(f" GAT heads: {gat_heads} (constraint-specific attention)")
+        print(f" HGT heads: {hgt_heads} (global context attention)")
+        print(f" Mid-global context at layer {self.mid_global_layer}/{layer_count}")
+        print(f" Expected to reduce Type 2 errors via enhanced global reasoning")
         
         # First heterogeneous layer 
         self.conv1 = HeteroConv({
@@ -450,10 +450,11 @@ class _HModule(nn.Module):
         )
         self.norm = _RMSNorm(hidden_dim)
     
-    def forward(self, nodes, z_prev):
+    def forward(self, nodes, z_prev, return_attention=False):
         """
         nodes: [C, d] - all node states
         z_prev: [d] - previous global state
+        return_attention: if True, also return averaged attention weights
         """
         C, d = nodes.shape
         
@@ -472,7 +473,13 @@ class _HModule(nn.Module):
         
         # Update z_H
         z = torch.cat([pooled, z_prev], dim=-1)  # [2d]
-        return self.norm(self.mlp(z))  # [d]
+        z_out = self.norm(self.mlp(z))  # [d]
+        
+        if return_attention:
+            # Average attention weights across heads
+            avg_attention = attn_weights.mean(dim=0)  # [C]
+            return z_out, avg_attention
+        return z_out
 
 
 class _Readout(nn.Module):
@@ -529,12 +536,12 @@ class HRM(nn.Module):
         ]
 
         print(f"HRM configured:")
-        print(f"  Cycles (H-updates): {n_cycles}")
-        print(f"  Micro-steps per cycle: {t_micro}")
-        print(f"  Total L-steps: {n_cycles * t_micro}")
-        print(f"  GAT heads: {gat_heads}, HGT heads: {hgt_heads}")
-        print(f"  H-pooling heads: {h_pooling_heads}")
-        print(f"  Input injection: {use_input_injection}")
+        print(f"Cycles (H-updates): {n_cycles}")
+        print(f"Micro-steps per cycle: {t_micro}")
+        print(f"Total L-steps: {n_cycles * t_micro}")
+        print(f"GAT heads: {gat_heads}, HGT heads: {hgt_heads}")
+        print(f"H-pooling heads: {h_pooling_heads}")
+        print(f"Input injection: {use_input_injection}")
 
         # Modules
         self.embed = _InitialEmbed(input_dim, hidden_dim, dropout)
@@ -556,30 +563,54 @@ class HRM(nn.Module):
         else:
             self.register_buffer("z0", torch.zeros(hidden_dim), persistent=False)
 
-    def forward(self, x_dict, edge_index_dict):
+    def forward(self, x_dict, edge_index_dict, return_intermediates=False):
         """
         x_dict: {'cell': [C, input_dim]}
         edge_index_dict: hetero edges
-        Returns: logits [C]
+        return_intermediates: if True, return dict with intermediate states
+        Returns: logits [C] or (logits, intermediates) if return_intermediates=True
         """
         x_in = x_dict['cell']
         nodes_embedded = self.embed(x_in)
         nodes = nodes_embedded
         z = self.z0
-
-        for _ in range(self.n_cycles):
+        
+        # Storage for intermediates
+        if return_intermediates:
+            L_states = []
+            H_attention = []
+        
+        for cycle_idx in range(self.n_cycles):
             # L micro-steps (weight-tied)
-            for __ in range(self.t_micro):
+            for micro_idx in range(self.t_micro):
                 nodes = self.l_block(
                     nodes, 
                     edge_index_dict, 
                     z, 
                     x_cell_embedded=nodes_embedded if self.use_input_injection else None
                 )
+                
+                if return_intermediates:
+                    # Store L-module state after each micro-step
+                    L_states.append(nodes.detach().cpu())
 
             # H update with attention pooling
-            z = self.h_mod(nodes, z)
+            if return_intermediates:
+                z, attention = self.h_mod(nodes, z, return_attention=True)
+                H_attention.append(attention.detach().cpu())
+            else:
+                z = self.h_mod(nodes, z, return_attention=False)
 
         # Final readout conditioned on z_H
         logits = self.readout(nodes, z)
+        
+        if return_intermediates:
+            intermediates = {
+                'L_states': L_states,  # List of 6 tensors (2 micro × 3 cycles)
+                'H_attention': H_attention,  # List of 3 tensors
+                'final_logits': logits.detach().cpu(),
+                'board_size': int(x_in.shape[0] ** 0.5)  # Assuming square board
+            }
+            return logits, intermediates
+        
         return logits
