@@ -567,7 +567,7 @@ class HRM(nn.Module):
         """
         x_dict: {'cell': [C, input_dim]}
         edge_index_dict: hetero edges
-        return_intermediates: if True, return dict with intermediate states
+        return_intermediates: if True, return dict with intermediate states including z_H and FiLM params
         Returns: logits [C] or (logits, intermediates) if return_intermediates=True
         """
         x_in = x_dict['cell']
@@ -579,10 +579,23 @@ class HRM(nn.Module):
         if return_intermediates:
             L_states = []
             H_attention = []
+            z_H_history = [z.detach().cpu()]  # Store z_H after each H-module update
+            film_params = []  # Store gamma, beta from each FiLM application
         
         for cycle_idx in range(self.n_cycles):
             # L micro-steps (weight-tied)
             for micro_idx in range(self.t_micro):
+                # Capture FiLM parameters if needed
+                if return_intermediates:
+                    # Hook into FiLM to capture gamma, beta
+                    gamma, beta = self.l_block.film.mlp(z).chunk(2, dim=-1)
+                    film_params.append({
+                        'cycle': cycle_idx,
+                        'micro': micro_idx,
+                        'gamma': gamma.detach().cpu(),
+                        'beta': beta.detach().cpu()
+                    })
+                
                 nodes = self.l_block(
                     nodes, 
                     edge_index_dict, 
@@ -598,6 +611,7 @@ class HRM(nn.Module):
             if return_intermediates:
                 z, attention = self.h_mod(nodes, z, return_attention=True)
                 H_attention.append(attention.detach().cpu())
+                z_H_history.append(z.detach().cpu())  # Store z_H after H-module update
             else:
                 z = self.h_mod(nodes, z, return_attention=False)
 
@@ -608,6 +622,8 @@ class HRM(nn.Module):
             intermediates = {
                 'L_states': L_states,  # List of 6 tensors (2 micro × 3 cycles)
                 'H_attention': H_attention,  # List of 3 tensors
+                'z_H_history': z_H_history,  # List of 4 tensors (z0 + one per cycle)
+                'film_params': film_params,  # List of dicts with gamma, beta per micro-step
                 'final_logits': logits.detach().cpu(),
                 'board_size': int(x_in.shape[0] ** 0.5)  # Assuming square board
             }
