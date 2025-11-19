@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.colors as colors
 import matplotlib.patches as mpatches
 from typing import Dict, List, Tuple, Optional
 from pathlib import Path
@@ -69,7 +70,7 @@ class Solver:
         Returns
         -------
         torch.Tensor
-            [n², feature_dim] tensor with normalized coordinates, one-hot region encoding, and queen flags
+            [n^2, feature_dim] tensor with normalized coordinates, one-hot region encoding, and queen flags
         """
         n = region_board.shape[0]
         N2 = n * n
@@ -89,52 +90,36 @@ class Solver:
     def _process_intermediates(self, intermediates: dict, n: int, 
                              activation_metric: str = 'l2_norm') -> dict:
         """
-        Convert HRM intermediates (L-states, H-attention) to per-cycle activation heatmaps.
+        Convert HRM intermediates (L-states) to per-cycle activation heatmaps.
         
         Parameters
         ----------
         intermediates : dict
-            Dict with 'L_states' and 'H_attention' from HRM forward pass
-            L_states: list of [C, d] tensors (6 total, 2 micro × 3 cycles)
-            H_attention: list of [C] tensors (3 total, one per cycle)
+            Dict with 'L_states' from HRM forward pass
+            L_states: list of [C, d] tensors (6 total, 2 micro — 3 cycles)
         n : int
-            Board dimension (n×n)
+            Board dimension (nxn)
         activation_metric : str
             Metric for computing per-cell activation: 'l2_norm', 'mean_embedding', or 'max_embedding'
         
         Returns
         -------
         dict with keys:
-            'L': {'early', 'mid', 'late', 'full'} - [n, n] activation heatmaps
-            'H': {'early', 'mid', 'late', 'full'} - [n, n] attention heatmaps
+            'L': {'early', 'mid', 'late'} - [n, n] activation heatmaps
+            'H': {'early', 'mid', 'late'} - [n, n] attention heatmaps
         """
         L_states = intermediates['L_states']  # List of 6 tensors [C, d]
-        H_attention = intermediates['H_attention']  # List of 3 tensors [C]
         
         # Process L-states: group by cycle, compute activation per cell
         L_early = self._compute_cycle_activation(L_states[0:2], n, activation_metric)      # Micro 0-1 of cycle 0
         L_mid = self._compute_cycle_activation(L_states[2:4], n, activation_metric)        # Micro 0-1 of cycle 1
         L_late = self._compute_cycle_activation(L_states[4:6], n, activation_metric)       # Micro 0-1 of cycle 2
-        L_full = self._compute_cycle_activation(L_states, n, activation_metric)            # All 6 states
-        
-        # Process H-attention: reshape and normalize
-        H_early = H_attention[0].cpu().numpy().reshape(n, n)           # After cycle 0
-        H_mid = H_attention[1].cpu().numpy().reshape(n, n)             # After cycle 1
-        H_late = H_attention[2].cpu().numpy().reshape(n, n)            # After cycle 2
-        H_full = np.mean([h.cpu().numpy() for h in H_attention], axis=0).reshape(n, n)
         
         return {
             'L': {
                 'early': L_early,
                 'mid': L_mid,
-                'late': L_late,
-                'full': L_full
-            },
-            'H': {
-                'early': H_early,
-                'mid': H_mid,
-                'late': H_late,
-                'full': H_full
+                'late': L_late
             }
         }
     
@@ -146,7 +131,7 @@ class Solver:
         Parameters
         ----------
         state_list : List[torch.Tensor]
-            List of [C, d] embeddings (C = n², d = hidden_dim)
+            List of [C, d] embeddings (C = n^2, d = hidden_dim)
         n : int
             Board dimension
         activation_metric : str
@@ -217,7 +202,7 @@ class Solver:
             (row, col, logit)
         If capture_activations=True:
             (row, col, logit, activation_dict) where activation_dict contains
-            per-cycle L-state and H-attention heatmaps
+            per-cycle L-state
         """
         n = region_board.shape[0]
         
@@ -369,8 +354,8 @@ class Solver:
             row, col = act_dict['placement']
             logit = act_dict['logit']
             
-            # Create figure: 1 row (board reference + L activations), 5 cols
-            fig, axes = plt.subplots(1, 5, figsize=(24, 5))
+            # Create figure: 1 row (board reference + L activations), 4 cols
+            fig, axes = plt.subplots(1, 4, figsize=(20, 5))
             fig.suptitle(f"Queen {step_idx + 1}/{num_placements}: Placement ({row}, {col}) | Logit: {logit:.3f}", 
                         fontsize=14, fontweight='bold')
             
@@ -381,32 +366,33 @@ class Solver:
             
             ax.set_title('Board State', fontsize=12, fontweight='bold')
             
-            # Columns 1-4: L-module activations
+            # Columns 1-3: L-module activations
             L_maps = act_dict['L']
             for col_idx, (stage_name, heatmap) in enumerate([
                 ('Early', L_maps['early']),
                 ('Mid', L_maps['mid']),
-                ('Late', L_maps['late']),
-                ('Full', L_maps['full'])
+                ('Late', L_maps['late'])
             ]):
                 ax = axes[col_idx + 1]
                 
                 # Main heatmap with RdBu colormap
                 im = ax.imshow(heatmap, cmap='RdBu_r', vmin=0, vmax=1)
                 
-                # Draw orthogonal region boundaries (box edges only, no diagonals)
-                if show_regions:
-                    self._draw_region_boundaries(ax, region_board)
+                # Add cell grid lines
+                ax.set_xticks(np.arange(-0.5, n, 1), minor=True)
+                ax.set_yticks(np.arange(-0.5, n, 1), minor=True)
+                ax.grid(which='minor', color='black', linewidth=1)
                 
                 ax.set_title(f"L-{stage_name}", fontsize=12, fontweight='bold')
                 ax.set_xticks([])
                 ax.set_yticks([])
+                ax.tick_params(which='both', bottom=False, left=False, 
+                             labelbottom=False, labelleft=False)
                 
-                # Draw previously placed queens as symbols
+                # Draw previously placed queens with clean 'X' markers
                 for prev_row, prev_col in placed_queens:
-                    ax.text(prev_col, prev_row, '♛', fontsize=20, ha='center', va='center',
-                           color='white', fontweight='bold', 
-                           bbox=dict(boxstyle='circle', facecolor='black', alpha=0.8, pad=0.4))
+                    ax.text(prev_col, prev_row, 'X', fontsize=24, ha='center', va='center',
+                           color='black', fontweight='bold')
                 
                 # Mark current placement with bright star
                 ax.scatter([col], [row], marker='*', color='lime', s=1000, 
@@ -482,7 +468,8 @@ class Solver:
     
     def _draw_colored_board(self, ax, region_board, placed_queens, current_row, current_col):
         """
-        Draw a colored board with regions, region boundaries, and queen placements.
+        Draw a colored board with regions and queen placements.
+        Uses the clean visualization style from visualize_queens_board_with_queens.
         
         Parameters
         ----------
@@ -500,53 +487,30 @@ class Solver:
         n = region_board.shape[0]
         
         # Create colored board based on regions
-        region_cmap = plt.cm.get_cmap('tab20', len(np.unique(region_board)))
-        region_colored = region_cmap(region_board.astype(float) / region_board.max())
-        ax.imshow(region_colored, alpha=1.0)
+        cmap = plt.get_cmap('tab20', np.max(region_board) + 1)
+        norm = colors.BoundaryNorm(boundaries=np.arange(-0.5, np.max(region_board) + 1.5), 
+                                   ncolors=np.max(region_board) + 1)
+        ax.imshow(region_board, cmap=cmap, norm=norm)
         
-        # Draw region boundaries
-        self._draw_region_boundaries(ax, region_board)
+        # Draw grid lines for cell boundaries
+        ax.set_xticks(np.arange(-0.5, n, 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, n, 1), minor=True)
+        ax.grid(which='minor', color='black', linewidth=1)
         
-        # Draw previously placed queens
+        # Draw previously placed queens with clean 'X' markers
         for prev_row, prev_col in placed_queens:
-            ax.text(prev_col, prev_row, '♛', fontsize=20, ha='center', va='center',
-                   color='white', fontweight='bold', 
-                   bbox=dict(boxstyle='circle', facecolor='black', alpha=0.8, pad=0.4))
+            ax.text(prev_col, prev_row, "X", va='center', ha='center',
+                   fontsize=24, color='black', fontweight='bold')
         
         # Mark current placement with bright star
         ax.scatter([current_col], [current_row], marker='*', color='lime', s=1000, 
                   edgecolors='white', linewidths=3, zorder=10)
         
+        # Remove tick labels but keep grid
         ax.set_xticks([])
         ax.set_yticks([])
-    
-    def _draw_region_boundaries(self, ax, region_board):
-        """
-        Draw orthogonal (boxy) boundaries between regions.
-        Only draws horizontal and vertical edges, no diagonals.
-        
-        Parameters
-        ----------
-        ax : matplotlib.axes.Axes
-            Matplotlib axis to draw boundaries on
-        region_board : np.ndarray
-            [n, n] array of region IDs
-        """
-        n = region_board.shape[0]
-        
-        # Draw vertical lines (between columns)
-        for i in range(n):
-            for j in range(n - 1):
-                if region_board[i, j] != region_board[i, j + 1]:
-                    ax.plot([j + 0.5, j + 0.5], [i - 0.5, i + 0.5], 
-                           color='black', linewidth=2.5, alpha=0.8)
-        
-        # Draw horizontal lines (between rows)
-        for i in range(n - 1):
-            for j in range(n):
-                if region_board[i, j] != region_board[i + 1, j]:
-                    ax.plot([j - 0.5, j + 0.5], [i + 0.5, i + 0.5], 
-                           color='black', linewidth=2.5, alpha=0.8)
+        ax.tick_params(which='both', bottom=False, left=False, 
+                      labelbottom=False, labelleft=False)
     
     def _create_region_overlay(self, region_board: np.ndarray, n: int) -> np.ndarray:
         """
