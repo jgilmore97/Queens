@@ -4,14 +4,12 @@ import torch
 import os
 
 def _detect_notebook_environment():
-    """Detect if running in a notebook environment where multiprocessing can be problematic."""
+    """Detect if running in a notebook environment."""
     try:
-        # Check for common notebook indicators
         if 'COLAB_GPU' in os.environ:
             return True
         if 'JPY_PARENT_PID' in os.environ:
             return True
-        # Check if IPython is available and we're in a notebook
         try:
             from IPython import get_ipython
             if get_ipython() is not None:
@@ -27,24 +25,22 @@ class ModelConfig:
     """Model architecture configuration."""
     input_dim: int = 14
     hidden_dim: int = 128
-    layer_count: int = 6  # Used by GAT/HeteroGAT only
+    layer_count: int = 6
     dropout: float = 0.2
-    
-    # Separate head configurations
+
     gat_heads: int = 2
     hgt_heads: int = 4
-    
-    # Model selection
+
     model_type: str = "HRM"  # "GAT", "HeteroGAT", or "HRM"
     hetero_aggr: str = "sum"
-    
-    # HRM-specific parameters
-    n_cycles: int = 3              # Number of H-module updates
-    t_micro: int = 2               # L-module micro-steps per cycle
+
+    # HRM-specific
+    n_cycles: int = 3
+    t_micro: int = 2
     use_input_injection: bool = True
-    z_init: str = "zeros"          # "zeros" or "learned"
-    h_pooling_heads: int = 4  # Number of attention heads for H-module pooling
-    
+    z_init: str = "zeros"
+    h_pooling_heads: int = 4
+
     input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])
 
 @dataclass
@@ -55,75 +51,68 @@ class TrainingConfig:
     learning_rate: float = 1e-3
     weight_decay: float = 1e-5
     val_ratio: float = 0.10
-    
-    # Dataset switching
-    switch_epoch: int = 5  # Epoch to switch to state-0 dataset (999 = never switch)
+
+    switch_epoch: int = 5  # Epoch to switch to state-0 dataset (999 = never)
     state0_json_path: str = "state0_training_states.json"
-    mixed_ratio: float = 0.75  # Ratio of state-0 to old data in mixed dataset
-    
-    # Loss function
+    mixed_ratio: float = 0.75
+
     focal_alpha: float = 0.25
     focal_gamma: float = 2.0
-    
-    # Scheduler
-    scheduler_type: str = "plateau"  # "cosine", "step", "plateau"
+
+    scheduler_type: str = "plateau"
     cosine_t_max: int = 100
     cosine_eta_min: float = 1e-6
 
 @dataclass
 class DataConfig:
-    """Data loading and processing configuration."""
+    """Data loading configuration."""
     train_json: str = "10k_training_set_with_states.json"
-    test_json: str =  "test_set_with_states.json" #"FinalTestOfficialPuzzles.json" -use for small set of never mutated official LI boards
-    num_workers: int = 0 if _detect_notebook_environment() else 4  # Auto-detect and disable for notebooks
+    test_json: str = "test_set_with_states.json"
+    num_workers: int = 0 if _detect_notebook_environment() else 4
     pin_memory: bool = True
     shuffle_train: bool = True
     seed: int = 42
 
 @dataclass
 class ExperimentConfig:
-    """Experiment tracking and logging configuration."""
+    """Experiment tracking configuration."""
     project_name: str = "queens-puzzle-ml"
     experiment_name: Optional[str] = 'test'
     tags: list = 'test'
     notes: str = ""
-    
-    # Logging frequencies
+
     log_gradients_every_n_epochs: int = 1
     log_predictions_every_n_epochs: int = 2
     save_model_every_n_epochs: int = 10
-    
-    # Paths
+
     checkpoint_dir: str = "checkpoints/transformer/HRM"
     log_dir: str = "logs"
 
 @dataclass
 class SystemConfig:
-    """System and performance configuration."""
+    """System configuration."""
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     mixed_precision: bool = True
     compile_model: bool = False
     profile_memory: bool = False
 
 class Config:
-    """Main configuration class combining all sub-configs."""
-    
+    """Main configuration combining all sub-configs."""
+
     def __init__(self, **kwargs):
         self.model = ModelConfig()
         self.training = TrainingConfig()
         self.data = DataConfig()
         self.experiment = ExperimentConfig()
         self.system = SystemConfig()
-        
-        # Override with any provided kwargs
+
         self.update_from_dict(kwargs)
-        
-        # Print multiprocessing status for debugging
+
         if self.data.num_workers == 0:
-            print("ℹ️  DataLoader multiprocessing disabled (prevents worker shutdown errors)")
+            print("DataLoader multiprocessing disabled")
         else:
-            print(f"ℹ️  DataLoader using {self.data.num_workers} worker processes")
-    
+            print(f"DataLoader using {self.data.num_workers} workers")
+
     def update_from_dict(self, config_dict: Dict[str, Any]):
         """Update configuration from dictionary."""
         for section, values in config_dict.items():
@@ -132,9 +121,9 @@ class Config:
                 for key, value in values.items():
                     if hasattr(section_config, key):
                         setattr(section_config, key, value)
-    
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert configuration to dictionary for logging."""
+        """Convert configuration to dictionary."""
         return {
             "model": self.model.__dict__,
             "training": self.training.__dict__,
@@ -143,7 +132,6 @@ class Config:
             "system": self.system.__dict__,
         }
 
-# Example configurations for different experiment types
 BASELINE_CONFIG = {
     "experiment": {
         "experiment_name": "RUN 3 of HRM inspired Model - add attention based h pooling, increase cycles",
