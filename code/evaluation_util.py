@@ -55,14 +55,11 @@ def evaluate_full_puzzle_capability(
         region_board = np.array(puzzle['region'])
         n = region_board.shape[0]
 
-        if 'label_board' in puzzle:
-            expected_solution = np.array(puzzle['label_board'])
-        elif 'solution_board' in puzzle:
-            expected_solution = np.array(puzzle['solution_board'])
-        else:
+        if 'label_board' not in puzzle:
             if verbose:
-                print(f"Puzzle {puzzle_idx} has no solution data - skipping")
+                print(f"Puzzle {puzzle_idx} has no label_board - skipping")
             continue
+        expected_solution = np.array(puzzle['label_board'])
 
         source = puzzle.get('source', f"puzzle_{puzzle_idx}")
 
