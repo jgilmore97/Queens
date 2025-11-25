@@ -18,11 +18,10 @@ import os
 import time
 from tqdm import tqdm
 
-# Function to detect grid size by counting transitions from non-black to black pixels along a line of pixels (counts black lines to detect grid size)
 def detect_grid_size_by_black_lines(
     image_path, axis='horizontal', row_or_col=100, black_threshold=50, visualize=False
 ):
-
+    """Detect grid size by counting transitions from non-black to black pixels along a scan line."""
     image = Image.open(image_path).convert("RGB")
     img_np = np.array(image)
 
@@ -70,8 +69,8 @@ def detect_grid_size_by_black_lines(
     return transitions + 1
 
 
-# Function to turn a jpg image of queens board into a tensor of RGB values
 def extract_rgb_tensor(image_path, row_scan=5, col_scan=5, center_ratio=0.4):
+    """Extract RGB tensor from board image by sampling center region of each cell."""
     image = Image.open(image_path).convert("RGB")
     img_np = np.array(image)
 
@@ -83,7 +82,7 @@ def extract_rgb_tensor(image_path, row_scan=5, col_scan=5, center_ratio=0.4):
     cell_height = height // grid_size
     cell_width = width // grid_size
 
-    rgb_tensor = np.zeros((grid_size, grid_size, 3), dtype=np.float32)
+    rgb_tensor = np.zeros((grid_size, grid_size, 3), dtype=np.float32)  # [n, n, 3]
 
     for row in range(grid_size):
         for col in range(grid_size):
@@ -103,22 +102,12 @@ def extract_rgb_tensor(image_path, row_scan=5, col_scan=5, center_ratio=0.4):
 
     return rgb_tensor
 
-# Combine with extract_rgb_tensor to create a function that turns the RGB tensor into integer labels ->every color in the RGB tensor is assigned a unique integer label
 def quantize_rgb_tensor(rgb_tensor, threshold=30):
-    """
-    Converts RGB tensor to integer-labeled tensor using per-image color clustering.
-
-    Args:
-        rgb_tensor (np.ndarray): n x n x 3 RGB tensor.
-        threshold (float): Distance threshold for matching colors.
-
-    Returns:
-        np.ndarray: n x n integer tensor.
-    """
+    """Convert RGB tensor to integer labels by clustering similar colors."""
     color_map = {}
     next_label = 0
     n = rgb_tensor.shape[0]
-    int_tensor = np.zeros((n, n), dtype=int)
+    int_tensor = np.zeros((n, n), dtype=int)  # [n, n]
 
     for row in range(n):
         for col in range(n):
@@ -136,23 +125,16 @@ def quantize_rgb_tensor(rgb_tensor, threshold=30):
 
     return int_tensor
 
-# Combine above 2 functions into one to fully extract the region tensor from a jpg image
 def extract(filepath, threshold=30):
+    """Extract region tensor from a board image file."""
     board_rgb = extract_rgb_tensor(filepath)
     region_tensor = quantize_rgb_tensor(board_rgb, threshold=threshold)
     return region_tensor
 
 
-# Uses traditional backtracking to solve the queens puzzle. Using to get label data.
 def solve_queens(region):
-    """
-    Solve the 'queens' puzzle on a square grid whose regions are encoded
-    by integer IDs in `region` (an N×N array).
-    Returns (positions, board):
-      - positions: list of (row,col) if a solution exists, otherwise None
-      - board: N×N array with 1 at queen positions and 0 elsewhere, or None
-    """
-    region = np.asarray(region)
+    """Solve the queens puzzle using backtracking. Returns (positions, board) or (None, None) if unsolvable."""
+    region = np.asarray(region)  # [n, n]
     n, m = region.shape
     assert n == m, "Board must be square"
 
@@ -165,49 +147,42 @@ def solve_queens(region):
             return True
         for col in range(n):
             reg_id = region[row, col]
-            # 1) one queen per column
+            # One queen per column and per region
             if col in columns_used or reg_id in regions_used:
                 continue
-            # 2) no diagonal adjacency
+            # No diagonal adjacency
             if any(abs(r - row) == 1 and abs(c - col) == 1 for r, c in positions):
                 continue
-            # place
             columns_used.add(col)
             regions_used.add(reg_id)
             positions.append((row, col))
             if backtrack(row + 1):
                 return True
-            # undo
             positions.pop()
             columns_used.remove(col)
             regions_used.remove(reg_id)
         return False
 
     if backtrack(0):
-        # build the board array
-        board = np.zeros((n, n), dtype=int)
+        board = np.zeros((n, n), dtype=int)  # [n, n]
         for r, c in positions:
             board[r, c] = 1
         return positions, board
     else:
         return None, None
 
-# ---------------------------------------------------------------------------------------------------------------------------------------------
-'''
-below bounded functions are used together to generate new training data boards by mutating existing ones.
-they mutate the board by growing or shrinking regions and checking if the resulting board is still valid, 
-ie all regions are contiguous, puzzle is still solvable, and there is only one solution.
-'''
+# Mutation functions for generating new training boards by growing/shrinking regions.
+# They ensure resulting boards have contiguous regions and unique solutions.
 
 def get_neighbors(x, y, shape):
-    """Return orthogonal neighbors."""
+    """Return orthogonal neighbors within bounds."""
     for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
         nx, ny = x + dx, y + dy
         if 0 <= nx < shape[0] and 0 <= ny < shape[1]:
             yield nx, ny
 
 def is_contiguous(board, region_id):
-    """Check if all cells of a region form one connected component."""
+    """Check if all cells of a region form one connected component via BFS."""
     visited = set()
     coords = np.argwhere(board == region_id)
     if len(coords) == 0:
@@ -227,7 +202,7 @@ def is_contiguous(board, region_id):
     return len(visited) == len(coords)
 
 def mutate_region_frontier(board, max_attempts=100):
-    """Mutate a region by growing/shrinking along the frontier."""
+    """Mutate a region by growing or shrinking along the frontier while maintaining contiguity."""
     board = board.copy()
     regions = np.unique(board)
 
@@ -236,20 +211,18 @@ def mutate_region_frontier(board, max_attempts=100):
         region_mask = (board == region)
         frontier = []
 
-        # Find frontier: cells adjacent to a different region
         for x, y in zip(*np.where(region_mask)):
             for nx, ny in get_neighbors(x, y, board.shape):
                 if board[nx, ny] != region:
                     frontier.append((x, y))
-                    break  # it's a border cell
+                    break
 
         if not frontier:
-            continue  # no valid frontier, try another region
+            continue
 
         action = random.choice(["grow", "shrink"])
 
         if action == "grow":
-            # Pick a border cell and try to steal a neighboring cell
             x, y = random.choice(frontier)
             neighbors = list(get_neighbors(x, y, board.shape))
             random.shuffle(neighbors)
@@ -257,14 +230,12 @@ def mutate_region_frontier(board, max_attempts=100):
             for nx, ny in neighbors:
                 neighbor_region = board[nx, ny]
                 if neighbor_region != region:
-                    # Tentatively change cell to our region
                     new_board = board.copy()
                     new_board[nx, ny] = region
 
                     if is_contiguous(new_board, neighbor_region) and is_contiguous(new_board, region):
                         return new_board
         elif action == "shrink":
-            # Try removing a border cell and assigning it to a neighbor
             x, y = random.choice(frontier)
             neighbors = list(get_neighbors(x, y, board.shape))
             random.shuffle(neighbors)
@@ -278,21 +249,11 @@ def mutate_region_frontier(board, max_attempts=100):
                     if is_contiguous(new_board, region) and is_contiguous(new_board, neighbor_region):
                         return new_board
 
-    return board  # no mutation found, return original
+    return board
 
 def count_solutions(region, max_solutions=None):
-    """
-    Counts the number of valid queen solutions for a board using the same logic
-    as solve_queens(), but without stopping at the first solution.
-
-    Parameters:
-    - region: N×N numpy array of region IDs (colors)
-    - max_solutions: Optional cap to stop early
-
-    Returns:
-    - Integer: number of unique valid solutions
-    """
-    region = np.asarray(region)
+    """Count valid queen solutions for a board, optionally stopping early at max_solutions."""
+    region = np.asarray(region)  # [n, n]
     n, m = region.shape
     assert n == m, "Board must be square"
 
@@ -330,17 +291,13 @@ def count_solutions(region, max_solutions=None):
     backtrack(0)
     return solution_count
 
-def generate_unique_mutated_board(original_board, 
-                                   min_percent=0.18, 
+def generate_unique_mutated_board(original_board,
+                                   min_percent=0.18,
                                    max_percent=0.45,
-                                   max_solution_count=1, 
-                                   max_attempts=60, 
+                                   max_solution_count=1,
+                                   max_attempts=60,
                                    max_mutation_tries=1000):
-    """
-    Mutates the board until a proportion of its cells are changed and it has a unique (or limited) solution count.
-    Returns:
-        A new board, or None if unable to create a valid one in the allotted attempts.
-    """
+    """Mutate board until target percentage of cells change and solution count is within limit."""
     n = original_board.shape[0]
     total_cells = n * n
     target_percent = random.uniform(min_percent, max_percent)
@@ -370,21 +327,12 @@ def hash_board(region):
     return hash(region.tobytes())
 
 def expand_board_dataset(seed_dataset, target_size=5000):
-    """
-    Expand a seed dataset via region-mutation until `target_size` boards exist.
-
-    Each returned board dict contains:
-      'region', 'queen_positions', 'solution_board',
-      'source'     -> original seed filename
-      'iteration'  -> 0 for seed, 1,2,… for descendants
-    """
-    # ---- initialise bookkeeping ----
+    """Expand seed dataset via region-mutation until target_size boards exist."""
     generated_dataset   = []
-    offspring_counter   = Counter()                 # how many boards per seed
-    fail_streak         = defaultdict(int)          # consecutive failed rounds per board hash
-    seen_hashes         = set()                     # every region we've accepted
+    offspring_counter   = Counter()
+    fail_streak         = defaultdict(int)
+    seen_hashes         = set()
 
-    # prime the pool with SEEDS (iteration = 0)
     available_pool = deque()
     for seed in seed_dataset:
         seed_entry = {
@@ -393,10 +341,9 @@ def expand_board_dataset(seed_dataset, target_size=5000):
             "source"     : seed.get("filename", "unknown")
         }
         available_pool.append(seed_entry)
-        seen_hashes.add(hash_board(seed["region"]))   # seeds are "seen" but not counted as generated
+        seen_hashes.add(hash_board(seed["region"]))
 
     round_count = 0
-    # ------------- main loop -------------
     while len(generated_dataset) < target_size and available_pool:
         round_count += 1
         print(f"\n=== Round {round_count} ===")
@@ -414,7 +361,6 @@ def expand_board_dataset(seed_dataset, target_size=5000):
             try:
                 new_region = generate_unique_mutated_board(base_region)
                 if new_region is None:
-                    # ➜ mutation failed; keep board, update fail-streak
                     board_key = hash_board(base_region)
                     fail_streak[board_key] += 1
                     if fail_streak[board_key] >= 5:
@@ -423,19 +369,15 @@ def expand_board_dataset(seed_dataset, target_size=5000):
                     next_pool.append(entry)
                     continue
 
-                # ----- mutation succeeded -----
                 region_hash = hash_board(new_region)
                 if region_hash in seen_hashes:
-                    # duplicate board, treat as failure for streak counting
                     board_key = hash_board(base_region)
                     fail_streak[board_key] += 1
                     next_pool.append(entry)
                     continue
 
-                # unique & valid → solve to get queen positions
                 positions, solution_board = solve_queens(new_region)
 
-                # child board dict
                 child_board = {
                     "region"          : new_region,
                     "queen_positions" : positions,
@@ -444,19 +386,17 @@ def expand_board_dataset(seed_dataset, target_size=5000):
                     "iteration"       : parent_iter + 1
                 }
 
-                # update global structures
                 generated_dataset.append(child_board)
                 next_pool.append(child_board)
                 seen_hashes.add(region_hash)
                 offspring_counter[root_source] += 1
                 successes += 1
 
-                # reset fail-streak for the *parent* (it finally succeeded)
                 fail_streak.pop(hash_board(base_region), None)
 
             except Exception as e:
                 print(f"Error mutating {root_source} (iter {parent_iter}): {e}")
-                next_pool.append(entry)  # keep for another try
+                next_pool.append(entry)
 
         print(f"Round {round_count} complete: {successes} new boards.")
         if successes == 0:
@@ -472,15 +412,8 @@ def expand_board_dataset(seed_dataset, target_size=5000):
 
     return generated_dataset, offspring_counter
 
-# take a board tensor and visualize it as a colored grid -> recreating the starting viz
 def visualize_queens_board(board: np.ndarray, title: str = "Colored Queens Board") -> None:
-    """
-    Visualize a Queens board where each integer represents a distinct color region.
-
-    Args:
-        board (np.ndarray): 2D numpy array with integer values representing color regions.
-        title (str): Title for the plot.
-    """
+    """Visualize a board where each integer represents a distinct color region."""
     n = board.shape[0]
     assert board.shape[0] == board.shape[1], "Board must be square (n x n)."
 
@@ -502,10 +435,7 @@ def visualize_queens_board(board: np.ndarray, title: str = "Colored Queens Board
     plt.show()
 
 def save_stateless_dataset_json(dataset, save_path):
-    """
-    Saves the dataset to a JSON file.
-    All NumPy arrays are converted to native Python lists.
-    """
+    """Save dataset to JSON with NumPy arrays converted to lists."""
     serializable_data = []
 
     for entry in dataset:
@@ -521,30 +451,19 @@ def save_stateless_dataset_json(dataset, save_path):
 
     print(f"Saved dataset to {save_path}")
 
-#-----------------------------------------------------------------------------------------------------
-# Below functions perform data augmentation by rotating the board and queen positions.
-# They generate 4 rotated versions (0°, 90°, 180°, 270°
 def rotate_matrix_90(matrix):
     """Rotate a 2D list 90 degrees clockwise."""
     return [list(row) for row in zip(*matrix[::-1])]
 
 def rotate_queen_positions(queen_positions, size, rotations):
-    """Rotate queen positions by 90° increments."""
+    """Rotate queen positions by 90 degree increments."""
     positions = queen_positions
     for _ in range(rotations):
         positions = [[col, size - 1 - row] for row, col in positions]
     return positions
 
 def rotate_board_data(board_data):
-    """
-    Generate 4 rotated versions (0°, 90°, 180°, 270°) of a queens board.
-
-    Input:
-    - board_data: dict with 'region', 'queen_positions', 'solution_board', 'source'
-
-    Output:
-    - List of 4 dicts, each rotated version with keys: region, queen_positions, solution_board, source
-    """
+    """Generate 4 rotated versions (0, 90, 180, 270 degrees) of a queens board."""
     original_region = board_data['region']
     original_solution_board = board_data['solution_board']
     original_queen_positions = board_data['queen_positions']
@@ -566,15 +485,14 @@ def rotate_board_data(board_data):
             'source': f"{source}_rot{i*90}",
             'iteration': iteration
         })
-        # Prepare for next rotation
         region = rotate_matrix_90(region)
         solution_board = rotate_matrix_90(solution_board)
         queen_positions = rotate_queen_positions(queen_positions, size, 1)
 
     return rotated_boards
-#-----------------------------------------------------------------------------------------------------
 
 def generate_training_states(board_data, state_0_only=False):
+    """Generate training examples with progressive queen placements from a solved board."""
     region = board_data['region']
     full_solution = board_data['queen_positions']
     board_size = len(region)
@@ -585,7 +503,6 @@ def generate_training_states(board_data, state_0_only=False):
     training_examples = []
     current_input = [[0]*board_size for _ in range(board_size)]
 
-    # Step 0: No queens placed yet
     label_output = [[0]*board_size for _ in range(board_size)]
     for r, c in rotated_queens:
         label_output[r][c] = 1
@@ -599,11 +516,9 @@ def generate_training_states(board_data, state_0_only=False):
         'iteration': board_data.get('iteration', 0)
     })
 
-    # If state_0_only is True, return only the initial state
     if state_0_only:
         return training_examples
 
-    # Steps 1 to N-1 (only if state_0_only is False)
     for i in range(board_size - 1):
         row, col = rotated_queens[i]
         current_input[row][col] = 1
@@ -623,36 +538,19 @@ def generate_training_states(board_data, state_0_only=False):
 
     return training_examples
 
-# Below function saves the dataset after state creation to a JSON file.
 def save_state_dataset_to_json(dataset, filename="queens_training_data.json"):
-    """
-    Saves the dataset to a JSON file in the current directory.
-
-    Args:
-        dataset (list): List of training examples (dicts).
-        filename (str): Name of the output JSON file.
-    """
+    """Save training dataset to a JSON file."""
     with open(filename, 'w') as f:
         json.dump(dataset, f, indent=2)
     print(f"Saved {len(dataset)} examples to {filename}")
 
-# Example usage:
-# save_dataset_to_json(all_training_data, "augmented_queens_data.json")
-
-# Below function visualizes a single training example with queens overlaid on the board.
 def visualize_queens_board_with_queens(example: dict, title: str = "Queens Board with Queens", show_labels = False) -> None:
-    """
-    Visualize a single training example from the dataset with queens overlaid.
-
-    Args:
-        example (dict): A single example from your dataset containing 'region' and 'partial_board'.
-        title (str): Optional title for the plot.
-    """
-    region_board = np.array(example['region'])
+    """Visualize a training example with queens overlaid on the colored region board."""
+    region_board = np.array(example['region'])  # [n, n]
     if not show_labels:
-        queen_board = np.array(example['partial_board'])
+        queen_board = np.array(example['partial_board'])  # [n, n]
     else:
-        queen_board = np.array(example['label_board'])
+        queen_board = np.array(example['label_board'])  # [n, n]
     n = region_board.shape[0]
 
     assert region_board.shape == queen_board.shape, "Board shape mismatch."
