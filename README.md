@@ -167,8 +167,6 @@ Weights & Biases integration for reproducibility:
 - Systematic evaluation, visualization, and analysis of learned reasoning
 - Experiment tracking and reproducibility at scale
 
-## Technical Insights
-
 ### Why Hierarchical Reasoning?
 
 Single-stage models struggle with Type-2 errors because they must balance two conflicting objectives simultaneously:
@@ -181,21 +179,3 @@ The HRM separates these concerns:
 - Cycling enables progressive refinement without exponential cost
 
 This structure maps to the problem's inherent difficulty hierarchy: early steps require global reasoning (most ambiguous), while later steps are dominated by local constraint elimination (highly determined).
-
-## Portfolio Application
-
-End-to-end demonstration:
-1. Load puzzle image
-2. Stepwise inference with model confidence scores
-3. Visualize intermediate activations showing reasoning progression
-4. Display final solution with solve-time and accuracy metrics
-5. Highlight hierarchical convergence across reasoning cycles
-
-Emphasizes learned problem-solving strategy and multi-scale reasoning rather than simple accuracy metrics.
-
-## Coding Standards
-
-- Production-level comments: concise, objective, no personal notes
-- Vectorized operations preferred for readability and performance
-- Consistent minimal style suitable for integration and reuse
-- Comprehensive docstrings: purpose, inputs, outputs
