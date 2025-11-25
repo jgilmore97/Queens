@@ -413,10 +413,10 @@ def test_solver_on_puzzle(solver: ModelEnabledQueensSolver, region_board: np.nda
     return result
 
 
-def verify_solution(region_board: np.ndarray, solution_board: np.ndarray) -> bool:
+def verify_solution(region_board: np.ndarray, label_board: np.ndarray) -> bool:
     """Verify that a solution satisfies all queens constraints."""
     n = region_board.shape[0]
-    queen_positions = [(r, c) for r in range(n) for c in range(n) if solution_board[r, c] == 1]
+    queen_positions = [(r, c) for r in range(n) for c in range(n) if label_board[r, c] == 1]
 
     if len(queen_positions) != n:
         return False

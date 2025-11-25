@@ -376,12 +376,12 @@ def expand_board_dataset(seed_dataset, target_size=5000):
                     next_pool.append(entry)
                     continue
 
-                positions, solution_board = solve_queens(new_region)
+                positions, label_board = solve_queens(new_region)
 
                 child_board = {
                     "region"          : new_region,
                     "queen_positions" : positions,
-                    "solution_board"  : solution_board,
+                    "label_board"     : label_board,
                     "source"          : root_source,
                     "iteration"       : parent_iter + 1
                 }
@@ -441,7 +441,7 @@ def save_stateless_dataset_json(dataset, save_path):
     for entry in dataset:
         serializable_data.append({
             "region": entry["region"].tolist(),
-            "solution_board": entry["solution_board"].tolist(),
+            "label_board": entry["label_board"].tolist(),
             "queen_positions": [list(pos) for pos in entry["queen_positions"]],
             "source": entry.get("source", "unknown")
         })
@@ -465,7 +465,7 @@ def rotate_queen_positions(queen_positions, size, rotations):
 def rotate_board_data(board_data):
     """Generate 4 rotated versions (0, 90, 180, 270 degrees) of a queens board."""
     original_region = board_data['region']
-    original_solution_board = board_data['solution_board']
+    original_label_board = board_data['label_board']
     original_queen_positions = board_data['queen_positions']
     source = board_data.get('source', 'unknown_source.jpg')
     iteration = board_data.get('iteration', 0)
@@ -474,19 +474,19 @@ def rotate_board_data(board_data):
     rotated_boards = []
 
     region = original_region
-    solution_board = original_solution_board
+    label_board = original_label_board
     queen_positions = original_queen_positions
 
     for i in range(4):
         rotated_boards.append({
             'region': copy.deepcopy(region),
-            'solution_board': copy.deepcopy(solution_board),
+            'label_board': copy.deepcopy(label_board),
             'queen_positions': copy.deepcopy(queen_positions),
             'source': f"{source}_rot{i*90}",
             'iteration': iteration
         })
         region = rotate_matrix_90(region)
-        solution_board = rotate_matrix_90(solution_board)
+        label_board = rotate_matrix_90(label_board)
         queen_positions = rotate_queen_positions(queen_positions, size, 1)
 
     return rotated_boards
