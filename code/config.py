@@ -192,6 +192,10 @@ HRM_TUNING_CONFIG = {
     "use_mixed_from_start": True,
     "mixed_ratio": 0.75,  # 75% state-0, 25% multi-state
 
+    # Subsampling for faster trials (set to 1.0/None to disable)
+    "train_subsample_ratio": 0.25,  # Use 25% of training data during tuning trials
+    "eval_subsample_size": 50,  # Evaluate on 50 puzzles during tuning (None = all)
+
     # Evaluation settings
     "eval_every_n_epochs": 5,  # Only eval at end of trial (faster)
     "batch_size": 256,

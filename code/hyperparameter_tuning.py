@@ -13,6 +13,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
+from torch.utils.data import Subset
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import optuna
 from optuna.pruners import MedianPruner
@@ -130,10 +131,15 @@ def create_model(params: dict, device: torch.device) -> HRM:
     return model.to(device)
 
 
-def create_data_loaders(tuning_config: dict, force_recreate: bool = False):
+def create_data_loaders(tuning_config: dict, force_recreate: bool = False, use_full_data: bool = False):
     """Create data loaders for tuning (state0-heavy mixed dataset).
 
     Uses caching to avoid recreating loaders for each trial.
+
+    Args:
+        tuning_config: Configuration dictionary
+        force_recreate: Force recreation even if cached
+        use_full_data: If True, use full dataset (for final retraining)
     """
     global _cached_train_loader, _cached_val_loader
 
@@ -147,6 +153,7 @@ def create_data_loaders(tuning_config: dict, force_recreate: bool = False):
     mixed_ratio = tuning_config["mixed_ratio"]
     state0_path = tuning_config["state0_json_path"]
     multistate_path = tuning_config["multistate_json_path"]
+    subsample_ratio = tuning_config.get("train_subsample_ratio", 1.0)
 
     # Create state-0 dataset
     state0_train = QueensDataset(
@@ -172,6 +179,15 @@ def create_data_loaders(tuning_config: dict, force_recreate: bool = False):
 
     # Create mixed dataset (state0-heavy)
     mixed_train = MixedDataset(state0_train, multistate_train, mixed_ratio)
+
+    # Apply subsampling for faster tuning trials (unless using full data for retraining)
+    if not use_full_data and subsample_ratio and subsample_ratio < 1.0:
+        full_size = len(mixed_train)
+        subset_size = int(full_size * subsample_ratio)
+        rng = np.random.RandomState(SEED)
+        indices = rng.choice(full_size, size=subset_size, replace=False)
+        mixed_train = Subset(mixed_train, indices)
+        print(f"  Subsampling training data: {subset_size:,}/{full_size:,} ({subsample_ratio:.0%})")
 
     # Use num_workers=0 for Colab compatibility
     train_loader = DataLoader(
@@ -359,11 +375,19 @@ def _get_full_solve_puzzles(full_solve_path: str) -> list:
 
 
 @torch.no_grad()
-def evaluate_full_solve(model, params: dict, full_solve_path: str, device: torch.device) -> float:
+def evaluate_full_solve(model, params: dict, full_solve_path: str, device: torch.device,
+                        max_puzzles: int = None) -> float:
     """Evaluate model on full puzzle solving and return success rate.
 
     This version evaluates directly without creating a Solver object,
     avoiding disk I/O and redundant model loading.
+
+    Args:
+        model: The HRM model to evaluate
+        params: Model hyperparameters (not used in direct evaluation)
+        full_solve_path: Path to validation puzzles JSON
+        device: Torch device
+        max_puzzles: If set, evaluate only this many puzzles (for faster tuning)
     """
     model.eval()
 
@@ -371,6 +395,13 @@ def evaluate_full_solve(model, params: dict, full_solve_path: str, device: torch
 
     if not state_0_puzzles:
         return 0.0
+
+    # Subsample puzzles for faster evaluation during tuning
+    if max_puzzles and max_puzzles < len(state_0_puzzles):
+        # Use deterministic sampling for consistency across trials
+        rng = np.random.RandomState(SEED)
+        indices = rng.choice(len(state_0_puzzles), size=max_puzzles, replace=False)
+        state_0_puzzles = [state_0_puzzles[i] for i in indices]
 
     successful_solves = 0
 
@@ -478,6 +509,7 @@ def objective(trial: optuna.Trial) -> float:
         eval_every = tuning_config["eval_every_n_epochs"]
         pruning_warmup = tuning_config["pruning_warmup_epochs"]
         full_solve_path = tuning_config["full_solve_val_path"]
+        eval_subsample = tuning_config.get("eval_subsample_size")
 
         best_solve_rate = 0.0
 
@@ -487,7 +519,8 @@ def objective(trial: optuna.Trial) -> float:
             scheduler.step(val_metrics['top1_accuracy'])
 
             if epoch % eval_every == 0 or epoch == epochs:
-                solve_rate = evaluate_full_solve(model, params, full_solve_path, device)
+                solve_rate = evaluate_full_solve(model, params, full_solve_path, device,
+                                                 max_puzzles=eval_subsample)
                 best_solve_rate = max(best_solve_rate, solve_rate)
 
                 print(f"  Epoch {epoch:02d} | "
@@ -534,9 +567,9 @@ def retrain_best_config(best_params: dict, device: torch.device, save_dir: Path)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {n_params:,}")
 
-    # Force recreate loaders for final training (fresh shuffle)
-    train_loader, val_loader = create_data_loaders(tuning_config, force_recreate=True)
-    print(f"\nTraining for {full_epochs} epochs...")
+    # Force recreate loaders for final training (fresh shuffle, FULL data - no subsampling)
+    train_loader, val_loader = create_data_loaders(tuning_config, force_recreate=True, use_full_data=True)
+    print(f"\nTraining for {full_epochs} epochs (using full dataset)...")
 
     optimizer = optim.AdamW(
         model.parameters(),
@@ -640,6 +673,15 @@ def run_hyperparameter_tuning():
     print("\nFixed Parameters:")
     for name, value in HRM_TUNING_SPACE.get("fixed", {}).items():
         print(f"  {name}: {value}")
+
+    # Print subsampling settings
+    train_subsample = tuning_config.get("train_subsample_ratio", 1.0)
+    eval_subsample = tuning_config.get("eval_subsample_size")
+    if train_subsample and train_subsample < 1.0:
+        print(f"\nSubsampling (faster tuning):")
+        print(f"  Training data: {train_subsample:.0%} of full dataset")
+    if eval_subsample:
+        print(f"  Eval puzzles: {eval_subsample} puzzles per evaluation")
     print("="*70 + "\n")
 
     # Set seeds for reproducibility
