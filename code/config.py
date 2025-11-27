@@ -199,8 +199,9 @@ HRM_TUNING_CONFIG = {
     # Pruning settings
     "pruning_warmup_epochs": 4,  # Don't prune before this epoch
 
-    # Paths
-    "state0_json_path": "state0_training_states.json",
+    # Paths (consistent with train_all_models.py)
+    "state0_json_path": "data/State0TrainingSet.json",
+    "multistate_json_path": "data/StateTrainingSet.json",
     "full_solve_val_path": "data/StateValSet.json",
     "results_dir": "tuning_results",
 }

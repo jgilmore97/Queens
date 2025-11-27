@@ -3,6 +3,9 @@ HRM Hyperparameter Tuning with Optuna
 
 Optimizes HRM model hyperparameters using Bayesian optimization,
 with full puzzle solve rate as the primary objective.
+
+Usage (Google Colab):
+    !python code/hyperparameter_tuning.py
 """
 
 import torch
@@ -16,9 +19,10 @@ from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
 import json
 import time
+import os
+import sys
 from pathlib import Path
 from datetime import datetime
-from tqdm.auto import tqdm
 import numpy as np
 
 from config import HRM_TUNING_SPACE, HRM_TUNING_CONFIG
@@ -30,6 +34,14 @@ from data_loader import (
 )
 from improved_solver import Solver
 from evaluation_util import evaluate_full_puzzle_capability
+
+# Disable W&B for hyperparameter tuning (use Optuna's own logging)
+os.environ['WANDB_MODE'] = 'disabled'
+
+# Configure Optuna logging for cleaner output
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+SEED = 42
 
 
 class FocalLoss(nn.Module):
@@ -51,9 +63,10 @@ def get_device():
     if torch.cuda.is_available():
         device = torch.device('cuda')
         print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+        print(f"  GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
     else:
         device = torch.device('cpu')
-        print("Using CPU")
+        print("Using CPU (training will be slower)")
     return device
 
 
@@ -79,7 +92,6 @@ def sample_hyperparameters(trial: optuna.Trial) -> dict:
 
     # Validate: hidden_dim must be divisible by gat_heads and h_pooling_heads
     if params["hidden_dim"] % params["gat_heads"] != 0:
-        # Adjust gat_heads to be compatible
         for heads in [2, 4]:
             if params["hidden_dim"] % heads == 0:
                 params["gat_heads"] = heads
@@ -112,37 +124,39 @@ def create_model(params: dict, device: torch.device) -> HRM:
     return model.to(device)
 
 
-def create_data_loaders(tuning_config: dict, seed: int = 42):
+def create_data_loaders(tuning_config: dict):
     """Create data loaders for tuning (state0-heavy mixed dataset)."""
     batch_size = tuning_config["batch_size"]
     mixed_ratio = tuning_config["mixed_ratio"]
     state0_path = tuning_config["state0_json_path"]
+    multistate_path = tuning_config["multistate_json_path"]
 
     # Create state-0 dataset
     state0_train = QueensDataset(
         state0_path,
         split="train",
         val_ratio=0.10,
-        seed=seed
+        seed=SEED
     )
     state0_val = QueensDataset(
         state0_path,
         split="val",
         val_ratio=0.10,
-        seed=seed
+        seed=SEED
     )
 
     # Create filtered multi-state dataset
     multistate_train = create_filtered_old_dataset(
-        "10k_training_set_with_states.json",
+        multistate_path,
         val_ratio=0.10,
-        seed=seed,
+        seed=SEED,
         split="train"
     )
 
     # Create mixed dataset (state0-heavy)
     mixed_train = MixedDataset(state0_train, multistate_train, mixed_ratio)
 
+    # Use num_workers=0 for Colab compatibility
     train_loader = DataLoader(
         mixed_train,
         batch_size=batch_size,
@@ -222,10 +236,8 @@ def train_epoch(model, loader, criterion, optimizer, device):
         total_loss += loss.item() * len(labels)
         total_nodes += len(labels)
 
-        # Calculate top-1 accuracy
         with torch.no_grad():
             top1_acc = calculate_top1_accuracy(logits, labels, batch)
-            # Estimate graph count from batch
             if hasattr(batch, 'batch_dict') and 'cell' in batch.batch_dict:
                 n_graphs = len(torch.unique(batch.batch_dict['cell']))
             else:
@@ -281,11 +293,9 @@ def evaluate_epoch(model, loader, criterion, device):
 
 def evaluate_full_solve(model, params: dict, full_solve_path: str, device: torch.device) -> float:
     """Evaluate model on full puzzle solving and return success rate."""
-    # Save model temporarily for Solver to load
     temp_checkpoint_path = Path(HRM_TUNING_CONFIG["results_dir"]) / "temp_model.pt"
     temp_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Create config dict matching what Solver expects
     config_dict = {
         'input_dim': params['input_dim'],
         'hidden_dim': params['hidden_dim'],
@@ -309,10 +319,9 @@ def evaluate_full_solve(model, params: dict, full_solve_path: str, device: torch
         stats = evaluate_full_puzzle_capability(solver, full_solve_path, verbose=False)
         success_rate = stats.get('success_rate', 0.0)
     except Exception as e:
-        print(f"Full-solve evaluation failed: {e}")
+        print(f"  Full-solve evaluation failed: {e}")
         success_rate = 0.0
     finally:
-        # Clean up temp file
         if temp_checkpoint_path.exists():
             temp_checkpoint_path.unlink()
 
@@ -324,7 +333,6 @@ def objective(trial: optuna.Trial) -> float:
     device = get_device()
     tuning_config = HRM_TUNING_CONFIG
 
-    # Sample hyperparameters
     params = sample_hyperparameters(trial)
 
     # Log trial parameters
@@ -335,23 +343,22 @@ def objective(trial: optuna.Trial) -> float:
         if k not in HRM_TUNING_SPACE.get("fixed", {}):
             print(f"  {k}: {v}")
 
-    # Create model
     try:
         model = create_model(params, device)
         n_params = sum(p.numel() for p in model.parameters())
         print(f"  Model parameters: {n_params:,}")
     except Exception as e:
-        print(f"Model creation failed: {e}")
+        print(f"  Model creation failed: {e}")
         raise optuna.TrialPruned()
 
-    # Create data loaders
     try:
         train_loader, val_loader = create_data_loaders(tuning_config)
+        print(f"  Train samples: {len(train_loader.dataset):,}")
+        print(f"  Val samples: {len(val_loader.dataset):,}")
     except Exception as e:
-        print(f"Data loading failed: {e}")
+        print(f"  Data loading failed: {e}")
         raise optuna.TrialPruned()
 
-    # Training setup
     optimizer = optim.AdamW(
         model.parameters(),
         lr=params["learning_rate"],
@@ -368,36 +375,30 @@ def objective(trial: optuna.Trial) -> float:
     best_solve_rate = 0.0
 
     for epoch in range(1, epochs + 1):
-        # Train
         train_metrics = train_epoch(model, train_loader, criterion, optimizer, device)
-
-        # Validate (single-step)
         val_metrics = evaluate_epoch(model, val_loader, criterion, device)
         scheduler.step(val_metrics['top1_accuracy'])
 
-        # Full-solve evaluation (expensive, do less frequently)
         if epoch % eval_every == 0 or epoch == epochs:
             solve_rate = evaluate_full_solve(model, params, full_solve_path, device)
             best_solve_rate = max(best_solve_rate, solve_rate)
 
-            print(f"Epoch {epoch:02d} | "
-                  f"Train Loss: {train_metrics['loss']:.4f} T1: {train_metrics['top1_accuracy']:.3f} | "
-                  f"Val T1: {val_metrics['top1_accuracy']:.3f} | "
-                  f"Full-Solve: {solve_rate:.1%}")
+            print(f"  Epoch {epoch:02d} | "
+                  f"Loss: {train_metrics['loss']:.4f} | "
+                  f"T1: {train_metrics['top1_accuracy']:.3f}/{val_metrics['top1_accuracy']:.3f} | "
+                  f"Solve: {solve_rate:.1%}")
 
-            # Report to Optuna for pruning
             trial.report(solve_rate, epoch)
 
-            # Check if should prune
             if epoch >= pruning_warmup and trial.should_prune():
-                print(f"Trial {trial.number} pruned at epoch {epoch}")
+                print(f"  Trial {trial.number} pruned at epoch {epoch}")
                 raise optuna.TrialPruned()
         else:
-            print(f"Epoch {epoch:02d} | "
-                  f"Train Loss: {train_metrics['loss']:.4f} T1: {train_metrics['top1_accuracy']:.3f} | "
-                  f"Val T1: {val_metrics['top1_accuracy']:.3f}")
+            print(f"  Epoch {epoch:02d} | "
+                  f"Loss: {train_metrics['loss']:.4f} | "
+                  f"T1: {train_metrics['top1_accuracy']:.3f}/{val_metrics['top1_accuracy']:.3f}")
 
-    print(f"Trial {trial.number} completed with best solve rate: {best_solve_rate:.1%}")
+    print(f"  Trial {trial.number} completed | Best solve rate: {best_solve_rate:.1%}")
     return best_solve_rate
 
 
@@ -406,22 +407,22 @@ def retrain_best_config(best_params: dict, device: torch.device, save_dir: Path)
     tuning_config = HRM_TUNING_CONFIG
     full_epochs = tuning_config["full_training_epochs"]
 
-    print(f"\n{'='*60}")
+    print(f"\n{'='*70}")
     print("RETRAINING BEST CONFIGURATION")
-    print(f"{'='*60}")
+    print(f"{'='*70}")
     print("Best hyperparameters:")
     for k, v in best_params.items():
         print(f"  {k}: {v}")
 
-    # Create model
     model = create_model(best_params, device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {n_params:,}")
 
-    # Create data loaders
     train_loader, val_loader = create_data_loaders(tuning_config)
+    print(f"Train samples: {len(train_loader.dataset):,}")
+    print(f"Val samples: {len(val_loader.dataset):,}")
+    print(f"\nTraining for {full_epochs} epochs...")
 
-    # Training setup
     optimizer = optim.AdamW(
         model.parameters(),
         lr=best_params["learning_rate"],
@@ -440,25 +441,23 @@ def retrain_best_config(best_params: dict, device: torch.device, save_dir: Path)
         val_metrics = evaluate_epoch(model, val_loader, criterion, device)
         scheduler.step(val_metrics['top1_accuracy'])
 
-        # Evaluate full-solve every 2 epochs
         if epoch % 2 == 0 or epoch == full_epochs:
             solve_rate = evaluate_full_solve(model, best_params, full_solve_path, device)
 
-            print(f"Epoch {epoch:02d}/{full_epochs} | "
-                  f"Train Loss: {train_metrics['loss']:.4f} T1: {train_metrics['top1_accuracy']:.3f} | "
-                  f"Val T1: {val_metrics['top1_accuracy']:.3f} | "
-                  f"Full-Solve: {solve_rate:.1%}")
-
-            if solve_rate > best_solve_rate:
+            is_best = solve_rate > best_solve_rate
+            if is_best:
                 best_solve_rate = solve_rate
-                best_model_state = model.state_dict().copy()
-                print(f"  New best solve rate!")
+                best_model_state = {k: v.clone() for k, v in model.state_dict().items()}
+
+            print(f"Epoch {epoch:02d}/{full_epochs} | "
+                  f"Loss: {train_metrics['loss']:.4f} | "
+                  f"T1: {train_metrics['top1_accuracy']:.3f}/{val_metrics['top1_accuracy']:.3f} | "
+                  f"Solve: {solve_rate:.1%} {'[BEST]' if is_best else ''}")
         else:
             print(f"Epoch {epoch:02d}/{full_epochs} | "
-                  f"Train Loss: {train_metrics['loss']:.4f} T1: {train_metrics['top1_accuracy']:.3f} | "
-                  f"Val T1: {val_metrics['top1_accuracy']:.3f}")
+                  f"Loss: {train_metrics['loss']:.4f} | "
+                  f"T1: {train_metrics['top1_accuracy']:.3f}/{val_metrics['top1_accuracy']:.3f}")
 
-    # Save best model
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
 
@@ -502,17 +501,40 @@ def run_hyperparameter_tuning():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     study_name = f"hrm_tuning_{timestamp}"
 
-    print(f"\n{'='*60}")
+    print("\n" + "="*70)
     print("HRM HYPERPARAMETER TUNING")
-    print(f"{'='*60}")
+    print("="*70)
     print(f"Study name: {study_name}")
     print(f"Number of trials: {n_trials}")
     print(f"Epochs per trial: {tuning_config['epochs_per_trial']}")
+    print(f"Full training epochs: {tuning_config['full_training_epochs']}")
     print(f"Results directory: {results_dir}")
-    print(f"{'='*60}\n")
+    print(f"Primary metric: Full puzzle solve rate")
+    print("="*70)
+
+    # Print search space
+    print("\nSearch Space:")
+    for name, config in HRM_TUNING_SPACE.items():
+        if name == "fixed":
+            continue
+        if config["type"] == "categorical":
+            print(f"  {name}: {config['values']}")
+        else:
+            print(f"  {name}: [{config['low']}, {config['high']}] ({config['type']})")
+
+    print("\nFixed Parameters:")
+    for name, value in HRM_TUNING_SPACE.get("fixed", {}).items():
+        print(f"  {name}: {value}")
+    print("="*70 + "\n")
+
+    # Set seeds for reproducibility
+    torch.manual_seed(SEED)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(SEED)
+    np.random.seed(SEED)
 
     # Create Optuna study
-    sampler = TPESampler(seed=42)
+    sampler = TPESampler(seed=SEED)
     pruner = MedianPruner(
         n_startup_trials=5,
         n_warmup_steps=tuning_config["pruning_warmup_epochs"],
@@ -521,21 +543,23 @@ def run_hyperparameter_tuning():
 
     study = optuna.create_study(
         study_name=study_name,
-        direction="maximize",  # Maximize solve rate
+        direction="maximize",
         sampler=sampler,
         pruner=pruner,
     )
 
     # Run optimization
     start_time = time.time()
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
     elapsed_time = time.time() - start_time
 
     # Print results
-    print(f"\n{'='*60}")
+    print(f"\n{'='*70}")
     print("TUNING COMPLETE")
-    print(f"{'='*60}")
-    print(f"Total time: {elapsed_time/60:.1f} minutes")
+    print(f"{'='*70}")
+    print(f"Total time: {elapsed_time/60:.1f} minutes ({elapsed_time/3600:.2f} hours)")
+    print(f"Completed trials: {len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])}")
+    print(f"Pruned trials: {len([t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED])}")
     print(f"Best trial: {study.best_trial.number}")
     print(f"Best solve rate: {study.best_value:.1%}")
     print(f"\nBest hyperparameters:")
@@ -549,6 +573,8 @@ def run_hyperparameter_tuning():
         'best_value': study.best_value,
         'best_params': study.best_params,
         'n_trials': len(study.trials),
+        'n_completed': len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]),
+        'n_pruned': len([t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]),
         'elapsed_time_seconds': elapsed_time,
         'all_trials': [
             {
@@ -591,11 +617,15 @@ def run_hyperparameter_tuning():
     with open(results_path, 'w') as f:
         json.dump(results, f, indent=2)
 
-    print(f"\n{'='*60}")
-    print("HYPERPARAMETER TUNING COMPLETE")
-    print(f"{'='*60}")
+    print(f"\n{'='*70}")
+    print("HYPERPARAMETER TUNING COMPLETE!")
+    print(f"{'='*70}")
     print(f"Best configuration solve rate: {final_solve_rate:.1%}")
-    print(f"Model saved to: {results_dir / 'best_tuned_hrm.pt'}")
+    print(f"\nResults saved to:")
+    print(f"  - {results_path}")
+    print(f"  - {results_dir / 'best_tuned_hrm.pt'}")
+    print(f"\nNext step: Use the tuned model for inference or further training")
+    print("="*70)
 
     return study, final_model
 
