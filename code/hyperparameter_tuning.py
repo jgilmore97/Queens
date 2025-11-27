@@ -43,9 +43,8 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 SEED = 42
 
-# Global cached data loaders (created once, reused across trials)
+# Global cached data loader (created once, reused across trials)
 _cached_train_loader = None
-_cached_val_loader = None
 
 # Global cached validation puzzles for full-solve evaluation
 _cached_full_solve_puzzles = None
@@ -131,23 +130,23 @@ def create_model(params: dict, device: torch.device) -> HRM:
     return model.to(device)
 
 
-def create_data_loaders(tuning_config: dict, force_recreate: bool = False, use_full_data: bool = False):
-    """Create data loaders for tuning (state0-heavy mixed dataset).
+def create_train_loader(tuning_config: dict, force_recreate: bool = False, use_full_data: bool = False):
+    """Create training data loader for tuning (state0-heavy mixed dataset).
 
-    Uses caching to avoid recreating loaders for each trial.
+    Uses caching to avoid recreating loader for each trial.
 
     Args:
         tuning_config: Configuration dictionary
         force_recreate: Force recreation even if cached
         use_full_data: If True, use full dataset (for final retraining)
     """
-    global _cached_train_loader, _cached_val_loader
+    global _cached_train_loader
 
-    # Return cached loaders if available
-    if not force_recreate and _cached_train_loader is not None and _cached_val_loader is not None:
-        return _cached_train_loader, _cached_val_loader
+    # Return cached loader if available
+    if not force_recreate and _cached_train_loader is not None:
+        return _cached_train_loader
 
-    print("Creating data loaders (will be cached for subsequent trials)...")
+    print("Creating training data loader (will be cached for subsequent trials)...")
 
     batch_size = tuning_config["batch_size"]
     mixed_ratio = tuning_config["mixed_ratio"]
@@ -155,24 +154,18 @@ def create_data_loaders(tuning_config: dict, force_recreate: bool = False, use_f
     multistate_path = tuning_config["multistate_json_path"]
     subsample_ratio = tuning_config.get("train_subsample_ratio", 1.0)
 
-    # Create state-0 dataset
+    # Create state-0 dataset (use all data, no val split needed)
     state0_train = QueensDataset(
         state0_path,
         split="train",
-        val_ratio=0.10,
-        seed=SEED
-    )
-    state0_val = QueensDataset(
-        state0_path,
-        split="val",
-        val_ratio=0.10,
+        val_ratio=0.0,  # Use all data for training
         seed=SEED
     )
 
     # Create filtered multi-state dataset
     multistate_train = create_filtered_old_dataset(
         multistate_path,
-        val_ratio=0.10,
+        val_ratio=0.0,  # Use all data for training
         seed=SEED,
         split="train"
     )
@@ -199,61 +192,19 @@ def create_data_loaders(tuning_config: dict, force_recreate: bool = False, use_f
         follow_batch=[]
     )
 
-    val_loader = DataLoader(
-        state0_val,
-        batch_size=batch_size // 2,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=True,
-        follow_batch=[]
-    )
-
-    # Cache the loaders
+    # Cache the loader
     _cached_train_loader = train_loader
-    _cached_val_loader = val_loader
 
     print(f"  Train samples: {len(train_loader.dataset):,}")
-    print(f"  Val samples: {len(val_loader.dataset):,}")
 
-    return train_loader, val_loader
-
-
-def calculate_top1_accuracy(logits, labels, batch_info):
-    """Calculate top-1 accuracy for a batch of heterogeneous graphs."""
-    device = logits.device
-
-    if hasattr(batch_info, 'batch_dict') and 'cell' in batch_info.batch_dict:
-        batch_indices = batch_info.batch_dict['cell']
-    elif hasattr(batch_info, '_slice_dict') and 'cell' in batch_info._slice_dict:
-        slices = batch_info._slice_dict['cell']['x']
-        batch_indices = torch.zeros(len(logits), dtype=torch.long, device=device)
-        for i in range(len(slices) - 1):
-            batch_indices[slices[i]:slices[i+1]] = i
-    else:
-        batch_indices = torch.zeros(len(logits), dtype=torch.long, device=device)
-
-    unique_batches = torch.unique(batch_indices)
-    num_graphs = len(unique_batches)
-
-    correct = 0
-    for i in unique_batches:
-        mask = (batch_indices == i)
-        graph_logits = logits[mask]
-        graph_labels = labels[mask]
-        top_idx = torch.argmax(graph_logits)
-        if graph_labels[top_idx].item() == 1:
-            correct += 1
-
-    return correct / num_graphs if num_graphs > 0 else 0.0
+    return train_loader
 
 
 def train_epoch(model, loader, criterion, optimizer, device):
-    """Train for one epoch, return metrics."""
+    """Train for one epoch, return loss."""
     model.train()
     total_loss = 0.0
     total_nodes = 0
-    total_top1_correct = 0
-    total_graphs = 0
 
     for batch in loader:
         batch = batch.to(device)
@@ -276,59 +227,7 @@ def train_epoch(model, loader, criterion, optimizer, device):
         total_loss += loss.item() * len(labels)
         total_nodes += len(labels)
 
-        with torch.no_grad():
-            top1_acc = calculate_top1_accuracy(logits, labels, batch)
-            if hasattr(batch, 'batch_dict') and 'cell' in batch.batch_dict:
-                n_graphs = len(torch.unique(batch.batch_dict['cell']))
-            else:
-                n_graphs = 1
-            total_top1_correct += top1_acc * n_graphs
-            total_graphs += n_graphs
-
-    return {
-        'loss': total_loss / total_nodes,
-        'top1_accuracy': total_top1_correct / total_graphs if total_graphs > 0 else 0.0,
-    }
-
-
-@torch.no_grad()
-def evaluate_epoch(model, loader, criterion, device):
-    """Evaluate model on validation set."""
-    model.eval()
-    total_loss = 0.0
-    total_nodes = 0
-    total_top1_correct = 0
-    total_graphs = 0
-
-    for batch in loader:
-        batch = batch.to(device)
-
-        x_dict = {'cell': batch['cell'].x}
-        edge_index_dict = {
-            ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
-            ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
-            ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
-        }
-        labels = batch['cell'].y
-
-        logits = model(x_dict, edge_index_dict)
-        loss = criterion(logits, labels.float())
-
-        total_loss += loss.item() * len(labels)
-        total_nodes += len(labels)
-
-        top1_acc = calculate_top1_accuracy(logits, labels, batch)
-        if hasattr(batch, 'batch_dict') and 'cell' in batch.batch_dict:
-            n_graphs = len(torch.unique(batch.batch_dict['cell']))
-        else:
-            n_graphs = 1
-        total_top1_correct += top1_acc * n_graphs
-        total_graphs += n_graphs
-
-    return {
-        'loss': total_loss / total_nodes,
-        'top1_accuracy': total_top1_correct / total_graphs if total_graphs > 0 else 0.0,
-    }
+    return total_loss / total_nodes
 
 
 def _build_node_features(region_board: np.ndarray, queen_board: np.ndarray, max_regions: int = 11) -> torch.Tensor:
@@ -490,7 +389,7 @@ def objective(trial: optuna.Trial) -> float:
         raise optuna.TrialPruned()
 
     try:
-        train_loader, val_loader = create_data_loaders(tuning_config)
+        train_loader = create_train_loader(tuning_config)
     except Exception as e:
         print(f"  Data loading failed: {e}")
         cleanup_gpu()
@@ -502,7 +401,7 @@ def objective(trial: optuna.Trial) -> float:
             lr=params["learning_rate"],
             weight_decay=params["weight_decay"]
         )
-        scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
         criterion = FocalLoss(alpha=0.25, gamma=2.0)
 
         epochs = tuning_config["epochs_per_trial"]
@@ -514,19 +413,15 @@ def objective(trial: optuna.Trial) -> float:
         best_solve_rate = 0.0
 
         for epoch in range(1, epochs + 1):
-            train_metrics = train_epoch(model, train_loader, criterion, optimizer, device)
-            val_metrics = evaluate_epoch(model, val_loader, criterion, device)
-            scheduler.step(val_metrics['top1_accuracy'])
+            train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
+            scheduler.step(train_loss)
 
             if epoch % eval_every == 0 or epoch == epochs:
                 solve_rate = evaluate_full_solve(model, params, full_solve_path, device,
                                                  max_puzzles=eval_subsample)
                 best_solve_rate = max(best_solve_rate, solve_rate)
 
-                print(f"  Epoch {epoch:02d} | "
-                      f"Loss: {train_metrics['loss']:.4f} | "
-                      f"T1: {train_metrics['top1_accuracy']:.3f}/{val_metrics['top1_accuracy']:.3f} | "
-                      f"Solve: {solve_rate:.1%}")
+                print(f"  Epoch {epoch:02d} | Loss: {train_loss:.4f} | Solve: {solve_rate:.1%}")
 
                 trial.report(solve_rate, epoch)
 
@@ -534,9 +429,7 @@ def objective(trial: optuna.Trial) -> float:
                     print(f"  Trial {trial.number} pruned at epoch {epoch}")
                     raise optuna.TrialPruned()
             else:
-                print(f"  Epoch {epoch:02d} | "
-                      f"Loss: {train_metrics['loss']:.4f} | "
-                      f"T1: {train_metrics['top1_accuracy']:.3f}/{val_metrics['top1_accuracy']:.3f}")
+                print(f"  Epoch {epoch:02d} | Loss: {train_loss:.4f}")
 
         print(f"  Trial {trial.number} completed | Best solve rate: {best_solve_rate:.1%}")
         return best_solve_rate
@@ -567,8 +460,8 @@ def retrain_best_config(best_params: dict, device: torch.device, save_dir: Path)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {n_params:,}")
 
-    # Force recreate loaders for final training (fresh shuffle, FULL data - no subsampling)
-    train_loader, val_loader = create_data_loaders(tuning_config, force_recreate=True, use_full_data=True)
+    # Force recreate loader for final training (fresh shuffle, FULL data - no subsampling)
+    train_loader = create_train_loader(tuning_config, force_recreate=True, use_full_data=True)
     print(f"\nTraining for {full_epochs} epochs (using full dataset)...")
 
     optimizer = optim.AdamW(
@@ -576,7 +469,7 @@ def retrain_best_config(best_params: dict, device: torch.device, save_dir: Path)
         lr=best_params["learning_rate"],
         weight_decay=best_params["weight_decay"]
     )
-    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
     criterion = FocalLoss(alpha=0.25, gamma=2.0)
 
     full_solve_path = tuning_config["full_solve_val_path"]
@@ -585,9 +478,8 @@ def retrain_best_config(best_params: dict, device: torch.device, save_dir: Path)
     best_model_state = None
 
     for epoch in range(1, full_epochs + 1):
-        train_metrics = train_epoch(model, train_loader, criterion, optimizer, device)
-        val_metrics = evaluate_epoch(model, val_loader, criterion, device)
-        scheduler.step(val_metrics['top1_accuracy'])
+        train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
+        scheduler.step(train_loss)
 
         if epoch % 2 == 0 or epoch == full_epochs:
             solve_rate = evaluate_full_solve(model, best_params, full_solve_path, device)
@@ -597,14 +489,10 @@ def retrain_best_config(best_params: dict, device: torch.device, save_dir: Path)
                 best_solve_rate = solve_rate
                 best_model_state = {k: v.clone() for k, v in model.state_dict().items()}
 
-            print(f"Epoch {epoch:02d}/{full_epochs} | "
-                  f"Loss: {train_metrics['loss']:.4f} | "
-                  f"T1: {train_metrics['top1_accuracy']:.3f}/{val_metrics['top1_accuracy']:.3f} | "
+            print(f"Epoch {epoch:02d}/{full_epochs} | Loss: {train_loss:.4f} | "
                   f"Solve: {solve_rate:.1%} {'[BEST]' if is_best else ''}")
         else:
-            print(f"Epoch {epoch:02d}/{full_epochs} | "
-                  f"Loss: {train_metrics['loss']:.4f} | "
-                  f"T1: {train_metrics['top1_accuracy']:.3f}/{val_metrics['top1_accuracy']:.3f}")
+            print(f"Epoch {epoch:02d}/{full_epochs} | Loss: {train_loss:.4f}")
 
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
