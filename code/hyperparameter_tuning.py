@@ -43,6 +43,10 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 SEED = 42
 
+# Global cached data loaders (created once, reused across trials)
+_cached_train_loader = None
+_cached_val_loader = None
+
 
 class FocalLoss(nn.Module):
     """Binary focal loss for logits."""
@@ -124,8 +128,19 @@ def create_model(params: dict, device: torch.device) -> HRM:
     return model.to(device)
 
 
-def create_data_loaders(tuning_config: dict):
-    """Create data loaders for tuning (state0-heavy mixed dataset)."""
+def create_data_loaders(tuning_config: dict, force_recreate: bool = False):
+    """Create data loaders for tuning (state0-heavy mixed dataset).
+
+    Uses caching to avoid recreating loaders for each trial.
+    """
+    global _cached_train_loader, _cached_val_loader
+
+    # Return cached loaders if available
+    if not force_recreate and _cached_train_loader is not None and _cached_val_loader is not None:
+        return _cached_train_loader, _cached_val_loader
+
+    print("Creating data loaders (will be cached for subsequent trials)...")
+
     batch_size = tuning_config["batch_size"]
     mixed_ratio = tuning_config["mixed_ratio"]
     state0_path = tuning_config["state0_json_path"]
@@ -174,6 +189,13 @@ def create_data_loaders(tuning_config: dict):
         pin_memory=True,
         follow_batch=[]
     )
+
+    # Cache the loaders
+    _cached_train_loader = train_loader
+    _cached_val_loader = val_loader
+
+    print(f"  Train samples: {len(train_loader.dataset):,}")
+    print(f"  Val samples: {len(val_loader.dataset):,}")
 
     return train_loader, val_loader
 
@@ -353,8 +375,6 @@ def objective(trial: optuna.Trial) -> float:
 
     try:
         train_loader, val_loader = create_data_loaders(tuning_config)
-        print(f"  Train samples: {len(train_loader.dataset):,}")
-        print(f"  Val samples: {len(val_loader.dataset):,}")
     except Exception as e:
         print(f"  Data loading failed: {e}")
         raise optuna.TrialPruned()
@@ -418,9 +438,8 @@ def retrain_best_config(best_params: dict, device: torch.device, save_dir: Path)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {n_params:,}")
 
-    train_loader, val_loader = create_data_loaders(tuning_config)
-    print(f"Train samples: {len(train_loader.dataset):,}")
-    print(f"Val samples: {len(val_loader.dataset):,}")
+    # Force recreate loaders for final training (fresh shuffle)
+    train_loader, val_loader = create_data_loaders(tuning_config, force_recreate=True)
     print(f"\nTraining for {full_epochs} epochs...")
 
     optimizer = optim.AdamW(

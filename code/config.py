@@ -163,7 +163,7 @@ HYPEROPT_CONFIG = {
 HRM_TUNING_SPACE = {
     # Architecture hyperparameters
     "t_micro": {"type": "categorical", "values": [2, 3, 4]},
-    "hidden_dim": {"type": "categorical", "values": [96, 128, 192, 256]},
+    "hidden_dim": {"type": "categorical", "values": [128, 192, 256]},
     "gat_heads": {"type": "categorical", "values": [2, 4]},
     "hgt_heads": {"type": "categorical", "values": [4, 6, 8]},
     "h_pooling_heads": {"type": "categorical", "values": [2, 4, 8]},
@@ -185,7 +185,7 @@ HRM_TUNING_SPACE = {
 HRM_TUNING_CONFIG = {
     # Trial settings
     "n_trials": 40,
-    "epochs_per_trial": 10,
+    "epochs_per_trial": 5,
     "full_training_epochs": 20,
 
     # Data settings - use state0-heavy from start for full-solve optimization
@@ -193,11 +193,11 @@ HRM_TUNING_CONFIG = {
     "mixed_ratio": 0.75,  # 75% state-0, 25% multi-state
 
     # Evaluation settings
-    "eval_every_n_epochs": 2,  # Run full-solve eval every N epochs
+    "eval_every_n_epochs": 5,  # Only eval at end of trial (faster)
     "batch_size": 256,
 
     # Pruning settings
-    "pruning_warmup_epochs": 4,  # Don't prune before this epoch
+    "pruning_warmup_epochs": 3,  # Don't prune before this epoch
 
     # Paths (consistent with train_all_models.py)
     "state0_json_path": "data/State0TrainingSet.json",
