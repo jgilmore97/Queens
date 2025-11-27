@@ -158,3 +158,49 @@ HYPEROPT_CONFIG = {
         "epochs": 15
     }
 }
+
+# HRM-specific hyperparameter tuning configuration
+HRM_TUNING_SPACE = {
+    # Architecture hyperparameters
+    "t_micro": {"type": "categorical", "values": [2, 3, 4]},
+    "hidden_dim": {"type": "categorical", "values": [96, 128, 192, 256]},
+    "gat_heads": {"type": "categorical", "values": [2, 4]},
+    "hgt_heads": {"type": "categorical", "values": [4, 6, 8]},
+    "h_pooling_heads": {"type": "categorical", "values": [2, 4, 8]},
+    "dropout": {"type": "categorical", "values": [0.1, 0.2, 0.3]},
+
+    # Training hyperparameters
+    "learning_rate": {"type": "loguniform", "low": 3e-4, "high": 3e-3},
+    "weight_decay": {"type": "loguniform", "low": 1e-6, "high": 1e-4},
+
+    # Fixed hyperparameters (not tuned)
+    "fixed": {
+        "n_cycles": 3,
+        "use_input_injection": True,
+        "z_init": "zeros",
+        "input_dim": 14,
+    }
+}
+
+HRM_TUNING_CONFIG = {
+    # Trial settings
+    "n_trials": 40,
+    "epochs_per_trial": 10,
+    "full_training_epochs": 20,
+
+    # Data settings - use state0-heavy from start for full-solve optimization
+    "use_mixed_from_start": True,
+    "mixed_ratio": 0.75,  # 75% state-0, 25% multi-state
+
+    # Evaluation settings
+    "eval_every_n_epochs": 2,  # Run full-solve eval every N epochs
+    "batch_size": 256,
+
+    # Pruning settings
+    "pruning_warmup_epochs": 4,  # Don't prune before this epoch
+
+    # Paths
+    "state0_json_path": "state0_training_states.json",
+    "full_solve_val_path": "data/StateValSet.json",
+    "results_dir": "tuning_results",
+}
