@@ -8,7 +8,15 @@ from tqdm.auto import tqdm
 import numpy as np
 
 from experiment_tracker_fixed import ExperimentTracker
-from data_loader import get_queens_loaders, QueensDataset, MixedDataset, create_filtered_old_dataset
+from data_loader import (
+    get_queens_loaders,
+    get_homogeneous_loaders,
+    QueensDataset,
+    HomogeneousQueensDataset,
+    MixedDataset,
+    create_filtered_old_dataset,
+    create_filtered_old_dataset_homogeneous
+)
 from config import Config
 from model import GAT, HeteroGAT, HRM
 
@@ -549,38 +557,80 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
         best_epoch = 0
         best_top1_epoch = 0
 
-        state0_train_loader, state0_val_loader = None, None
+        mixed_train_loader, state0_val_loader = None, None
         current_dataset = "multi-state"
+        switched = False
 
         print(f"Starting training for {config.training.epochs} epochs")
         print(f"Device: {device}")
         print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
         print("Tracking both threshold-based and top-1 metrics")
+        print("Using HOMOGENEOUS graph format (all edge types merged)")
         if config.training.switch_epoch < config.training.epochs:
-            print(f"Will switch to state-0 dataset at epoch {config.training.switch_epoch}")
+            print(f"Will switch to mixed dataset (75% state-0, 25% old) at epoch {config.training.switch_epoch}")
 
         for epoch in range(1, config.training.epochs + 1):
-            if epoch == config.training.switch_epoch and state0_train_loader is None:
-                print(f"\n🔄 Switching to state-0 dataset at epoch {epoch}")
+            if epoch == config.training.switch_epoch and mixed_train_loader is None:
+                print(f"\n🔄 Switching to mixed dataset at epoch {epoch}")
                 print(f"Loading state-0 dataset from {config.training.state0_json_path}")
 
-                from data_loader import get_queens_loaders
-                state0_train_loader, state0_val_loader = get_queens_loaders(
+                # Create homogeneous datasets
+                state0_train_dataset = HomogeneousQueensDataset(
                     config.training.state0_json_path,
-                    batch_size=config.training.batch_size // 2,
+                    split="train",
+                    val_ratio=config.training.val_ratio,
+                    seed=config.data.seed
+                )
+                state0_val_dataset = HomogeneousQueensDataset(
+                    config.training.state0_json_path,
+                    split="val",
+                    val_ratio=config.training.val_ratio,
+                    seed=config.data.seed
+                )
+
+                filtered_old_train_dataset = create_filtered_old_dataset_homogeneous(
+                    config.data.train_json,
                     val_ratio=config.training.val_ratio,
                     seed=config.data.seed,
+                    split="train"
+                )
+
+                mixed_dataset = MixedDataset(
+                    state0_train_dataset,
+                    filtered_old_train_dataset,
+                    config.training.mixed_ratio
+                )
+
+                mixed_train_loader = DataLoader(
+                    mixed_dataset,
+                    batch_size=config.training.batch_size // 2,
                     num_workers=config.data.num_workers,
                     pin_memory=config.data.pin_memory,
-                    shuffle_train=config.data.shuffle_train,
+                    shuffle=True,
                 )
-                current_dataset = "state-0"
-                print(f"State-0 train samples: {len(state0_train_loader.dataset):,}")
-                print(f"State-0 val samples: {len(state0_val_loader.dataset):,}")
 
-            if epoch >= config.training.switch_epoch and state0_train_loader is not None:
-                active_train_loader = state0_train_loader
-                current_dataset = "state-0"
+                state0_val_loader = DataLoader(
+                    state0_val_dataset,
+                    batch_size=config.training.batch_size // 4,
+                    num_workers=config.data.num_workers,
+                    pin_memory=config.data.pin_memory,
+                    shuffle=False,
+                )
+
+                current_dataset = "mixed (75% state-0, 25% old)"
+                switched = True
+
+                # Halve learning rate
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] /= 2
+                print(f"Divided learning rate by 2. Now: {optimizer.param_groups[0]['lr']:.1e}")
+
+                print(f"Mixed train samples: {len(mixed_dataset):,}")
+                print(f"State-0 val samples: {len(state0_val_dataset):,}")
+
+            if switched and mixed_train_loader is not None:
+                active_train_loader = mixed_train_loader
+                current_dataset = "mixed (75% state-0, 25% old)"
             else:
                 active_train_loader = train_loader
                 current_dataset = "multi-state"

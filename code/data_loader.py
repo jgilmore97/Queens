@@ -11,6 +11,7 @@ import numpy as np
 import torch
 from torch_geometric.data import Data, HeteroData, Dataset
 from torch_geometric.loader import DataLoader
+from torch_geometric.transforms import ToUndirected
 
 def build_heterogeneous_edge_index(region: np.ndarray) -> Dict[str, torch.Tensor]:
     """Return dictionary of edge_index tensors for each constraint type."""
@@ -289,6 +290,143 @@ def create_filtered_old_dataset(json_path, val_ratio, seed, split="train"):
         filtered_dataset.records = train_records
     elif split == "val":
         from data_loader import _split_by_img
+        train_records, val_records = _split_by_img(filtered_records, val_ratio, seed)
+        filtered_dataset.records = val_records
+    else:
+        filtered_dataset.records = filtered_records
+
+    return filtered_dataset
+
+def hetero_to_homogeneous(hetero_data: HeteroData) -> Data:
+    """Convert HeteroData to homogeneous Data by combining all edge types.
+
+    This allows training homogeneous models (GAT, GNN) on heterogeneous graph data.
+    All edge types (line, region, diagonal constraints) are merged into a single edge_index.
+    """
+    # Extract node features and labels
+    x = hetero_data['cell'].x
+    y = hetero_data['cell'].y
+
+    # Combine all edge types into a single edge_index
+    edge_indices = []
+    for edge_type in [('cell', 'line_constraint', 'cell'),
+                      ('cell', 'region_constraint', 'cell'),
+                      ('cell', 'diagonal_constraint', 'cell')]:
+        if edge_type in hetero_data.edge_index_dict:
+            edge_idx = hetero_data[edge_type].edge_index
+            if edge_idx.numel() > 0:
+                edge_indices.append(edge_idx)
+
+    # Concatenate all edges
+    if edge_indices:
+        edge_index = torch.cat(edge_indices, dim=1)
+    else:
+        edge_index = torch.empty((2, 0), dtype=torch.long)
+
+    # Create homogeneous Data object
+    data = Data(x=x, edge_index=edge_index, y=y)
+
+    # Preserve metadata
+    if hasattr(hetero_data, 'n'):
+        data.n = hetero_data.n
+    if hasattr(hetero_data, 'step'):
+        data.step = hetero_data.step
+    if hasattr(hetero_data, 'meta'):
+        data.meta = hetero_data.meta
+
+    return data
+
+class HomogeneousQueensDataset(QueensDataset):
+    """Wrapper around QueensDataset that converts HeteroData to homogeneous Data.
+
+    Use this for training GAT or GNN models that expect (x, edge_index) format.
+    """
+
+    def get(self, idx: int) -> Data:
+        """Get item and convert to homogeneous format."""
+        hetero_data = super().get(idx)
+        return hetero_to_homogeneous(hetero_data)
+
+def get_homogeneous_loaders(
+    json_path: str,
+    *,
+    batch_size: int = 512,
+    val_ratio: float = 0.10,
+    seed: int = 42,
+    num_workers: int = 0,
+    pin_memory: bool = True,
+    shuffle_train: bool = True,
+):
+    """Return (train_loader, val_loader) with homogeneous graphs for GAT/GNN models."""
+    ds_train = HomogeneousQueensDataset(
+        json_path,
+        split="train",
+        val_ratio=val_ratio,
+        seed=seed,
+    )
+    ds_val = HomogeneousQueensDataset(
+        json_path,
+        split="val",
+        val_ratio=val_ratio,
+        seed=seed,
+    )
+
+    kwargs = dict(
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
+
+    train_loader = DataLoader(ds_train, shuffle=shuffle_train, **kwargs)
+    val_loader = DataLoader(ds_val, shuffle=False, **kwargs)
+
+    return train_loader, val_loader
+
+def filter_dataset_to_step0(json_path: str | Path) -> List[dict]:
+    """Load dataset and filter to only step=0 puzzles.
+
+    Used for full-solve validation using StateValSet.json.
+    Returns list of puzzle records.
+    """
+    json_path = Path(json_path).expanduser()
+    records = json.loads(json_path.read_text())
+
+    step0_records = [
+        rec for rec in records
+        if rec.get('step', 0) == 0
+    ]
+
+    print(f"Filtered {json_path.name}: {len(records)} total → {len(step0_records)} step-0 puzzles")
+    return step0_records
+
+def create_filtered_old_dataset_homogeneous(json_path, val_ratio, seed, split="train"):
+    """Create homogeneous dataset from old multi-state data with iteration != 0 filtered out.
+
+    This is the homogeneous version of create_filtered_old_dataset, returning Data instead of HeteroData.
+    """
+    full_dataset = HomogeneousQueensDataset(
+        json_path,
+        split="all",
+        val_ratio=val_ratio,
+        seed=seed
+    )
+
+    # The underlying records are the same, just need to filter
+    filtered_records = [
+        record for record in full_dataset.records
+        if record.get('iteration', 0) != 0
+    ]
+
+    print(f"Filtered old dataset (homogeneous): {len(full_dataset.records)} -> {len(filtered_records)} (removed iteration 0)")
+
+    # Create new dataset with filtered records
+    filtered_dataset = HomogeneousQueensDataset.__new__(HomogeneousQueensDataset)
+    filtered_dataset.__dict__.update(full_dataset.__dict__)
+
+    if split == "train":
+        train_records, val_records = _split_by_img(filtered_records, val_ratio, seed)
+        filtered_dataset.records = train_records
+    elif split == "val":
         train_records, val_records = _split_by_img(filtered_records, val_ratio, seed)
         filtered_dataset.records = val_records
     else:

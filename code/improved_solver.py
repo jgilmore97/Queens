@@ -6,7 +6,7 @@ import matplotlib.patches as mpatches
 from typing import Dict, List, Tuple, Optional
 from pathlib import Path
 
-from model import HRM, HeteroGAT
+from model import HRM, HeteroGAT, GAT
 from data_loader import build_heterogeneous_edge_index
 from board_manipulation import solve_queens
 
@@ -14,7 +14,8 @@ from board_manipulation import solve_queens
 class Solver:
     def __init__(self, model_path, device: str = 'cuda'):
         self.device = device
-        self.model = self.load_model(model_path).to(device)
+        self.model, self.is_heterogeneous = self.load_model(model_path)
+        self.model = self.model.to(device)
         self.max_regions = 11
         self.model.eval()
 
@@ -23,6 +24,11 @@ class Solver:
         model_config = checkpoint['config_dict']
 
         is_hrm = model_config.get('model_type') == 'HRM' or 'n_cycles' in model_config
+
+        # Check if it's a homogeneous GAT
+        is_homogeneous_gat = ('layer_count' in model_config and
+                              'hgt_heads' not in model_config and
+                              not is_hrm)
 
         if is_hrm:
             model = HRM(
@@ -38,6 +44,17 @@ class Solver:
                 z_init=model_config.get('z_init', 'zeros'),
             )
             print(f"Loaded HRM solver (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)})")
+            is_heterogeneous = True
+        elif is_homogeneous_gat:
+            model = GAT(
+                input_dim=model_config['input_dim'],
+                hidden_dim=model_config['hidden_dim'],
+                layer_count=model_config['layer_count'],
+                dropout=model_config['dropout'],
+                heads=model_config.get('gat_heads', 2)
+            )
+            print(f"Loaded Homogeneous GAT solver")
+            is_heterogeneous = False
         else:
             model = HeteroGAT(
                 input_dim=model_config['input_dim'],
@@ -48,13 +65,14 @@ class Solver:
                 hgt_heads=model_config['hgt_heads']
             )
             print(f"Loaded HeteroGAT solver")
+            is_heterogeneous = True
 
         model.load_state_dict(checkpoint['model_state_dict'])
 
-        print(f"Model loaded from epoch {checkpoint['epoch']}")
+        print(f"Model loaded from checkpoint")
         print(f"Model config: {model_config}")
 
-        return model
+        return model, is_heterogeneous
 
     def _build_node_features(self, region_board: np.ndarray, queen_board: np.ndarray) -> torch.Tensor:
         """Build node feature vectors combining normalized coordinates, one-hot region encoding, and queen flags."""
