@@ -350,6 +350,14 @@ def evaluate_full_solve(model, params: dict, full_solve_path: str, device: torch
     return success_rate
 
 
+def cleanup_gpu():
+    """Clean up GPU memory between trials."""
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def objective(trial: optuna.Trial) -> float:
     """Optuna objective function: maximize full puzzle solve rate."""
     device = get_device()
@@ -365,61 +373,74 @@ def objective(trial: optuna.Trial) -> float:
         if k not in HRM_TUNING_SPACE.get("fixed", {}):
             print(f"  {k}: {v}")
 
+    model = None
     try:
         model = create_model(params, device)
         n_params = sum(p.numel() for p in model.parameters())
         print(f"  Model parameters: {n_params:,}")
     except Exception as e:
         print(f"  Model creation failed: {e}")
+        cleanup_gpu()
         raise optuna.TrialPruned()
 
     try:
         train_loader, val_loader = create_data_loaders(tuning_config)
     except Exception as e:
         print(f"  Data loading failed: {e}")
+        cleanup_gpu()
         raise optuna.TrialPruned()
 
-    optimizer = optim.AdamW(
-        model.parameters(),
-        lr=params["learning_rate"],
-        weight_decay=params["weight_decay"]
-    )
-    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
-    criterion = FocalLoss(alpha=0.25, gamma=2.0)
+    try:
+        optimizer = optim.AdamW(
+            model.parameters(),
+            lr=params["learning_rate"],
+            weight_decay=params["weight_decay"]
+        )
+        scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
+        criterion = FocalLoss(alpha=0.25, gamma=2.0)
 
-    epochs = tuning_config["epochs_per_trial"]
-    eval_every = tuning_config["eval_every_n_epochs"]
-    pruning_warmup = tuning_config["pruning_warmup_epochs"]
-    full_solve_path = tuning_config["full_solve_val_path"]
+        epochs = tuning_config["epochs_per_trial"]
+        eval_every = tuning_config["eval_every_n_epochs"]
+        pruning_warmup = tuning_config["pruning_warmup_epochs"]
+        full_solve_path = tuning_config["full_solve_val_path"]
 
-    best_solve_rate = 0.0
+        best_solve_rate = 0.0
 
-    for epoch in range(1, epochs + 1):
-        train_metrics = train_epoch(model, train_loader, criterion, optimizer, device)
-        val_metrics = evaluate_epoch(model, val_loader, criterion, device)
-        scheduler.step(val_metrics['top1_accuracy'])
+        for epoch in range(1, epochs + 1):
+            train_metrics = train_epoch(model, train_loader, criterion, optimizer, device)
+            val_metrics = evaluate_epoch(model, val_loader, criterion, device)
+            scheduler.step(val_metrics['top1_accuracy'])
 
-        if epoch % eval_every == 0 or epoch == epochs:
-            solve_rate = evaluate_full_solve(model, params, full_solve_path, device)
-            best_solve_rate = max(best_solve_rate, solve_rate)
+            if epoch % eval_every == 0 or epoch == epochs:
+                solve_rate = evaluate_full_solve(model, params, full_solve_path, device)
+                best_solve_rate = max(best_solve_rate, solve_rate)
 
-            print(f"  Epoch {epoch:02d} | "
-                  f"Loss: {train_metrics['loss']:.4f} | "
-                  f"T1: {train_metrics['top1_accuracy']:.3f}/{val_metrics['top1_accuracy']:.3f} | "
-                  f"Solve: {solve_rate:.1%}")
+                print(f"  Epoch {epoch:02d} | "
+                      f"Loss: {train_metrics['loss']:.4f} | "
+                      f"T1: {train_metrics['top1_accuracy']:.3f}/{val_metrics['top1_accuracy']:.3f} | "
+                      f"Solve: {solve_rate:.1%}")
 
-            trial.report(solve_rate, epoch)
+                trial.report(solve_rate, epoch)
 
-            if epoch >= pruning_warmup and trial.should_prune():
-                print(f"  Trial {trial.number} pruned at epoch {epoch}")
-                raise optuna.TrialPruned()
-        else:
-            print(f"  Epoch {epoch:02d} | "
-                  f"Loss: {train_metrics['loss']:.4f} | "
-                  f"T1: {train_metrics['top1_accuracy']:.3f}/{val_metrics['top1_accuracy']:.3f}")
+                if epoch >= pruning_warmup and trial.should_prune():
+                    print(f"  Trial {trial.number} pruned at epoch {epoch}")
+                    raise optuna.TrialPruned()
+            else:
+                print(f"  Epoch {epoch:02d} | "
+                      f"Loss: {train_metrics['loss']:.4f} | "
+                      f"T1: {train_metrics['top1_accuracy']:.3f}/{val_metrics['top1_accuracy']:.3f}")
 
-    print(f"  Trial {trial.number} completed | Best solve rate: {best_solve_rate:.1%}")
-    return best_solve_rate
+        print(f"  Trial {trial.number} completed | Best solve rate: {best_solve_rate:.1%}")
+        return best_solve_rate
+
+    except torch.cuda.OutOfMemoryError:
+        print(f"  Trial {trial.number} OOM - skipping this configuration")
+        raise optuna.TrialPruned()
+
+    finally:
+        # Always clean up GPU memory after trial
+        del model
+        cleanup_gpu()
 
 
 def retrain_best_config(best_params: dict, device: torch.device, save_dir: Path):

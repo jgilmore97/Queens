@@ -162,10 +162,10 @@ HYPEROPT_CONFIG = {
 # HRM-specific hyperparameter tuning configuration
 HRM_TUNING_SPACE = {
     # Architecture hyperparameters
-    "t_micro": {"type": "categorical", "values": [2, 3, 4]},
+    "t_micro": {"type": "categorical", "values": [2, 3]},  # Removed 4 (OOM risk)
     "hidden_dim": {"type": "categorical", "values": [128, 192, 256]},
     "gat_heads": {"type": "categorical", "values": [2, 4]},
-    "hgt_heads": {"type": "categorical", "values": [4, 6, 8]},
+    "hgt_heads": {"type": "categorical", "values": [4, 8]},  # Removed 6 (not divisible by 128/256)
     "h_pooling_heads": {"type": "categorical", "values": [2, 4, 8]},
     "dropout": {"type": "categorical", "values": [0.1, 0.2, 0.3]},
 
