@@ -31,9 +31,8 @@ from data_loader import (
     QueensDataset,
     MixedDataset,
     create_filtered_old_dataset,
+    build_heterogeneous_edge_index,
 )
-from improved_solver import Solver
-from evaluation_util import evaluate_full_puzzle_capability
 
 # Disable W&B for hyperparameter tuning (use Optuna's own logging)
 os.environ['WANDB_MODE'] = 'disabled'
@@ -46,6 +45,9 @@ SEED = 42
 # Global cached data loaders (created once, reused across trials)
 _cached_train_loader = None
 _cached_val_loader = None
+
+# Global cached validation puzzles for full-solve evaluation
+_cached_full_solve_puzzles = None
 
 
 class FocalLoss(nn.Module):
@@ -313,40 +315,113 @@ def evaluate_epoch(model, loader, criterion, device):
     }
 
 
-def evaluate_full_solve(model, params: dict, full_solve_path: str, device: torch.device) -> float:
-    """Evaluate model on full puzzle solving and return success rate."""
-    temp_checkpoint_path = Path(HRM_TUNING_CONFIG["results_dir"]) / "temp_model.pt"
-    temp_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+def _build_node_features(region_board: np.ndarray, queen_board: np.ndarray, max_regions: int = 11) -> torch.Tensor:
+    """Build node feature vectors for evaluation (same as Solver._build_node_features)."""
+    n = region_board.shape[0]
+    N2 = n * n
 
-    config_dict = {
-        'input_dim': params['input_dim'],
-        'hidden_dim': params['hidden_dim'],
-        'gat_heads': params['gat_heads'],
-        'hgt_heads': params['hgt_heads'],
-        'dropout': params['dropout'],
-        'n_cycles': params['n_cycles'],
-        't_micro': params['t_micro'],
-        'use_input_injection': params['use_input_injection'],
-        'z_init': params['z_init'],
-        'model_type': 'HRM',
-    }
+    coords = np.indices((n, n)).reshape(2, -1).T.astype(np.float32) / (n - 1)
 
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'config_dict': config_dict,
-    }, temp_checkpoint_path)
+    reg_onehot = np.zeros((N2, max_regions), dtype=np.float32)
+    flat_ids = region_board.flatten()
+    reg_onehot[np.arange(N2), flat_ids] = 1.0
+
+    has_queen = queen_board.flatten()[:, None].astype(np.float32)
+
+    features = np.hstack([coords, reg_onehot, has_queen])
+    return torch.from_numpy(features)
+
+
+def _get_full_solve_puzzles(full_solve_path: str) -> list:
+    """Load and cache full-solve validation puzzles."""
+    global _cached_full_solve_puzzles
+
+    if _cached_full_solve_puzzles is not None:
+        return _cached_full_solve_puzzles
 
     try:
-        solver = Solver(str(temp_checkpoint_path), device=str(device))
-        stats = evaluate_full_puzzle_capability(solver, full_solve_path, verbose=False)
-        success_rate = stats.get('success_rate', 0.0)
+        with open(full_solve_path, 'r') as f:
+            test_data = json.load(f)
     except Exception as e:
-        print(f"  Full-solve evaluation failed: {e}")
-        success_rate = 0.0
-    finally:
-        if temp_checkpoint_path.exists():
-            temp_checkpoint_path.unlink()
+        print(f"  Error loading dataset: {e}")
+        return []
 
+    # Filter to state-0 puzzles only
+    state_0_puzzles = []
+    for puzzle in test_data:
+        if 'step' in puzzle and puzzle['step'] == 0:
+            state_0_puzzles.append(puzzle)
+        elif 'step' not in puzzle:
+            state_0_puzzles.append(puzzle)
+
+    _cached_full_solve_puzzles = state_0_puzzles
+    return state_0_puzzles
+
+
+@torch.no_grad()
+def evaluate_full_solve(model, params: dict, full_solve_path: str, device: torch.device) -> float:
+    """Evaluate model on full puzzle solving and return success rate.
+
+    This version evaluates directly without creating a Solver object,
+    avoiding disk I/O and redundant model loading.
+    """
+    model.eval()
+
+    state_0_puzzles = _get_full_solve_puzzles(full_solve_path)
+
+    if not state_0_puzzles:
+        return 0.0
+
+    successful_solves = 0
+
+    for puzzle in state_0_puzzles:
+        region_board = np.array(puzzle['region'])
+        n = region_board.shape[0]
+
+        if 'label_board' not in puzzle:
+            continue
+        expected_solution = np.array(puzzle['label_board'])
+
+        # Build edge index once per puzzle
+        edge_index_dict = build_heterogeneous_edge_index(region_board)
+        edge_index_dict = {k: v.to(device) for k, v in edge_index_dict.items()}
+
+        edge_index_dict_formatted = {
+            ('cell', 'line_constraint', 'cell'): edge_index_dict['line_constraint'],
+            ('cell', 'region_constraint', 'cell'): edge_index_dict['region_constraint'],
+            ('cell', 'diagonal_constraint', 'cell'): edge_index_dict['diagonal_constraint'],
+        }
+
+        correct_positions = [(r, c) for r in range(n) for c in range(n) if expected_solution[r, c] == 1]
+        queen_board = np.zeros((n, n), dtype=int)
+
+        is_perfect = True
+
+        for step in range(n):
+            node_features = _build_node_features(region_board, queen_board)
+            node_features = node_features.to(device)
+
+            x_dict = {'cell': node_features}
+            logits = model(x_dict, edge_index_dict_formatted)
+
+            logits_np = logits.cpu().numpy().reshape(n, n)
+            top_idx = np.argmax(logits_np.flatten())
+            top_row, top_col = top_idx // n, top_idx % n
+
+            # Check if placement is correct
+            remaining_correct = [pos for pos in correct_positions if queen_board[pos[0], pos[1]] == 0]
+            is_correct = (top_row, top_col) in remaining_correct
+
+            if not is_correct:
+                is_perfect = False
+                break
+
+            queen_board[top_row, top_col] = 1
+
+        if is_perfect:
+            successful_solves += 1
+
+    success_rate = successful_solves / len(state_0_puzzles) if state_0_puzzles else 0.0
     return success_rate
 
 
