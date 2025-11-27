@@ -94,13 +94,29 @@ def evaluate_full_puzzle_capability(
 
             try:
                 with torch.no_grad():
-                    x_dict = {'cell': node_features}
-                    edge_index_dict_formatted = {
-                        ('cell', 'line_constraint', 'cell'): edge_index_dict['line_constraint'],
-                        ('cell', 'region_constraint', 'cell'): edge_index_dict['region_constraint'],
-                        ('cell', 'diagonal_constraint', 'cell'): edge_index_dict['diagonal_constraint'],
-                    }
-                    logits = solver.model(x_dict, edge_index_dict_formatted)
+                    # Check if solver uses heterogeneous or homogeneous format
+                    if hasattr(solver, 'is_heterogeneous') and not solver.is_heterogeneous:
+                        # Homogeneous GAT: combine all edge types
+                        edge_indices = []
+                        for edge_type in ['line_constraint', 'region_constraint', 'diagonal_constraint']:
+                            if edge_type in edge_index_dict and edge_index_dict[edge_type].numel() > 0:
+                                edge_indices.append(edge_index_dict[edge_type])
+
+                        if edge_indices:
+                            combined_edge_index = torch.cat(edge_indices, dim=1).to(device)
+                        else:
+                            combined_edge_index = torch.empty((2, 0), dtype=torch.long, device=device)
+
+                        logits = solver.model(node_features, combined_edge_index)
+                    else:
+                        # Heterogeneous model (HeteroGAT or HRM)
+                        x_dict = {'cell': node_features}
+                        edge_index_dict_formatted = {
+                            ('cell', 'line_constraint', 'cell'): edge_index_dict['line_constraint'],
+                            ('cell', 'region_constraint', 'cell'): edge_index_dict['region_constraint'],
+                            ('cell', 'diagonal_constraint', 'cell'): edge_index_dict['diagonal_constraint'],
+                        }
+                        logits = solver.model(x_dict, edge_index_dict_formatted)
             except Exception as e:
                 if verbose:
                     print(f"Model inference error at step {step} for puzzle {puzzle_idx}: {e}")

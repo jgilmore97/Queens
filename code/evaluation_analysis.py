@@ -13,11 +13,21 @@ from model import GAT, HeteroGAT
 from config import Config
 
 def load_model(model_path: str, config: Config, use_heterogeneous: bool = True):
-    """Load trained model from checkpoint and return it in eval mode."""
+    """Load trained model from checkpoint and return it in eval mode.
+
+    Automatically detects model type from checkpoint config_dict.
+    Supports: HRM, HeteroGAT, and homogeneous GAT.
+    """
     checkpoint = torch.load(model_path, map_location=config.system.device, weights_only=False)
 
     model_config = checkpoint.get('config_dict', {})
     is_hrm = model_config.get('model_type') == 'HRM' or 'n_cycles' in model_config
+
+    # Check if it's a homogeneous GAT (no layer_count means old HRM/HeteroGAT)
+    # If model has layer_count but no hgt_heads, it's likely homogeneous GAT
+    is_homogeneous_gat = ('layer_count' in model_config and
+                          'hgt_heads' not in model_config and
+                          not is_hrm)
 
     if is_hrm:
         from model import HRM
@@ -34,27 +44,28 @@ def load_model(model_path: str, config: Config, use_heterogeneous: bool = True):
             z_init=model_config.get('z_init', 'zeros'),
         )
         print(f"Loaded HRM model (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)})")
-    elif use_heterogeneous:
-        from model import HeteroGAT
-        model = HeteroGAT(
-            input_dim=config.model.input_dim,
-            hidden_dim=config.model.hidden_dim,
-            layer_count=config.model.layer_count,
-            dropout=config.model.dropout,
-            gat_heads=config.model.gat_heads,
-            hgt_heads=config.model.hgt_heads
-        )
-        print(f"Loaded Heterogeneous GAT model")
-    else:
+    elif is_homogeneous_gat or not use_heterogeneous:
         from model import GAT
         model = GAT(
-            input_dim=config.model.input_dim,
-            hidden_dim=config.model.hidden_dim,
-            layer_count=config.model.layer_count,
-            dropout=config.model.dropout,
-            heads=config.model.gat_heads
+            input_dim=model_config.get('input_dim', config.model.input_dim),
+            hidden_dim=model_config.get('hidden_dim', config.model.hidden_dim),
+            layer_count=model_config.get('layer_count', config.model.layer_count),
+            dropout=model_config.get('dropout', config.model.dropout),
+            heads=model_config.get('gat_heads', config.model.gat_heads)
         )
         print(f"Loaded Homogeneous GAT model")
+    else:
+        from model import HeteroGAT
+        model = HeteroGAT(
+            input_dim=model_config.get('input_dim', config.model.input_dim),
+            hidden_dim=model_config.get('hidden_dim', config.model.hidden_dim),
+            layer_count=model_config.get('layer_count', config.model.layer_count),
+            dropout=model_config.get('dropout', config.model.dropout),
+            gat_heads=model_config.get('gat_heads', config.model.gat_heads),
+            hgt_heads=model_config.get('hgt_heads', config.model.hgt_heads),
+            use_batch_norm=True
+        )
+        print(f"Loaded Heterogeneous GAT model")
 
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to(config.system.device)
