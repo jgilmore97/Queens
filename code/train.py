@@ -8,6 +8,8 @@ from tqdm.auto import tqdm
 import numpy as np
 
 from experiment_tracker_fixed import ExperimentTracker
+from evaluation_util import evaluate_full_puzzle_capability
+from improved_solver import LiveModelSolver
 from data_loader import (
     get_queens_loaders,
     get_homogeneous_loaders,
@@ -554,8 +556,10 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
 
         best_val_f1 = 0.0
         best_val_top1 = 0.0
+        best_puzzle_success = 0.0
         best_epoch = 0
         best_top1_epoch = 0
+        best_puzzle_epoch = 0
 
         mixed_train_loader, state0_val_loader = None, None
         current_dataset = "multi-state"
@@ -672,8 +676,14 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
                 device=device
             )
 
+            # Full puzzle evaluation
+            live_solver = LiveModelSolver(model, device, is_heterogeneous=False)
+            puzzle_stats = evaluate_full_puzzle_capability(live_solver, config.training.state0_json_path, verbose=False)
+            puzzle_success = puzzle_stats.get('success_rate', 0.0)
+
             is_best_f1 = val_metrics['f1'] > best_val_f1
             is_best_top1 = val_metrics['top1_accuracy'] > best_val_top1
+            is_best_puzzle = puzzle_success > best_puzzle_success
 
             if is_best_f1:
                 best_val_f1 = val_metrics['f1']
@@ -683,22 +693,26 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
                 best_val_top1 = val_metrics['top1_accuracy']
                 best_top1_epoch = epoch
 
-            tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_f1 or is_best_top1)
+            if is_best_puzzle:
+                best_puzzle_success = puzzle_success
+                best_puzzle_epoch = epoch
+
+            tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_puzzle)
 
             base_log = (f"Epoch {epoch:02d} [{current_dataset}] | "
                        f"Train: L={train_metrics['loss']:.4f} Acc={train_metrics['accuracy']:.3f} F1={train_metrics['f1']:.3f} T1={train_metrics['top1_accuracy']:.3f} | "
-                       f"Val: L={val_metrics['loss']:.4f} Acc={val_metrics['accuracy']:.3f} F1={val_metrics['f1']:.3f} T1={val_metrics['top1_accuracy']:.3f}")
+                       f"Val: L={val_metrics['loss']:.4f} Acc={val_metrics['accuracy']:.3f} F1={val_metrics['f1']:.3f} T1={val_metrics['top1_accuracy']:.3f} PS={puzzle_success:.1%}")
 
             if state0_val_metrics is not None:
                 base_log += f" | State0-Val: Acc={state0_val_metrics['accuracy']:.3f} F1={state0_val_metrics['f1']:.3f} T1={state0_val_metrics['top1_accuracy']:.3f}"
 
-            base_log += f" | LR={current_lr:.1e} | {'🎯F1' if is_best_f1 else ''}{'🎯T1' if is_best_top1 else ''}"
+            base_log += f" | LR={current_lr:.1e} | {'🎯F1' if is_best_f1 else ''}{'🎯T1' if is_best_top1 else ''}{'🎯PS' if is_best_puzzle else ''}"
             print(base_log)
 
         print(f"\nTraining completed!")
         print(f"Best validation F1: {best_val_f1:.4f} (epoch {best_epoch})")
         print(f"Best validation Top-1 Accuracy: {best_val_top1:.4f} (epoch {best_top1_epoch})")
-        print(f"📊 Key insight: Top-1 accuracy shows how well argmax(logits) performs")
+        print(f"Best puzzle success rate: {best_puzzle_success:.1%} (epoch {best_puzzle_epoch})")
 
         return model, best_val_f1
 
@@ -728,8 +742,10 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
 
         best_val_f1 = 0.0
         best_val_top1 = 0.0
+        best_puzzle_success = 0.0
         best_epoch = 0
         best_top1_epoch = 0
+        best_puzzle_epoch = 0
 
         mixed_train_loader, state0_val_loader = None, None
         current_dataset = "multi-state"
@@ -844,8 +860,14 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
                 device=device
             )
 
+            # Full puzzle evaluation
+            live_solver = LiveModelSolver(model, device, is_heterogeneous=True)
+            puzzle_stats = evaluate_full_puzzle_capability(live_solver, config.training.state0_json_path, verbose=False)
+            puzzle_success = puzzle_stats.get('success_rate', 0.0)
+
             is_best_f1 = val_metrics['f1'] > best_val_f1
             is_best_top1 = val_metrics['top1_accuracy'] > best_val_top1
+            is_best_puzzle = puzzle_success > best_puzzle_success
 
             if is_best_f1:
                 best_val_f1 = val_metrics['f1']
@@ -855,22 +877,26 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
                 best_val_top1 = val_metrics['top1_accuracy']
                 best_top1_epoch = epoch
 
-            tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_f1 or is_best_top1)
+            if is_best_puzzle:
+                best_puzzle_success = puzzle_success
+                best_puzzle_epoch = epoch
+
+            tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_puzzle)
 
             base_log = (f"Epoch {epoch:02d} [{current_dataset}] | "
                        f"Train: L={train_metrics['loss']:.4f} Acc={train_metrics['accuracy']:.3f} F1={train_metrics['f1']:.3f} T1={train_metrics['top1_accuracy']:.3f} | "
-                       f"Val: L={val_metrics['loss']:.4f} Acc={val_metrics['accuracy']:.3f} F1={val_metrics['f1']:.3f} T1={val_metrics['top1_accuracy']:.3f}")
+                       f"Val: L={val_metrics['loss']:.4f} Acc={val_metrics['accuracy']:.3f} F1={val_metrics['f1']:.3f} T1={val_metrics['top1_accuracy']:.3f} PS={puzzle_success:.1%}")
 
             if state0_val_metrics is not None:
                 base_log += f" | State0-Val: Acc={state0_val_metrics['accuracy']:.3f} F1={state0_val_metrics['f1']:.3f} T1={state0_val_metrics['top1_accuracy']:.3f}"
 
-            base_log += f" | LR={current_lr:.1e} | {'🎯F1' if is_best_f1 else ''}{'🎯T1' if is_best_top1 else ''}"
+            base_log += f" | LR={current_lr:.1e} | {'🎯F1' if is_best_f1 else ''}{'🎯T1' if is_best_top1 else ''}{'🎯PS' if is_best_puzzle else ''}"
             print(base_log)
 
         print(f"\nHETEROGENEOUS Training completed!")
         print(f"Best validation F1: {best_val_f1:.4f} (epoch {best_epoch})")
         print(f"Best validation Top-1 Accuracy: {best_val_top1:.4f} (epoch {best_top1_epoch})")
-        print(f"📊 Mixed training should improve early-game performance while preserving multi-state knowledge")
+        print(f"Best puzzle success rate: {best_puzzle_success:.1%} (epoch {best_puzzle_epoch})")
 
         return model, best_val_f1
 
@@ -899,8 +925,10 @@ def run_training_with_tracking_hrm(model, train_loader, val_loader, config, resu
 
         best_val_f1 = 0.0
         best_val_top1 = 0.0
+        best_puzzle_success = 0.0
         best_epoch = 0
         best_top1_epoch = 0
+        best_puzzle_epoch = 0
 
         mixed_train_loader, state0_val_loader = None, None
         switched = False
@@ -1004,8 +1032,14 @@ def run_training_with_tracking_hrm(model, train_loader, val_loader, config, resu
                 device=device
             )
 
+            # Full puzzle evaluation
+            live_solver = LiveModelSolver(model, device, is_heterogeneous=True)
+            puzzle_stats = evaluate_full_puzzle_capability(live_solver, config.training.state0_json_path, verbose=False)
+            puzzle_success = puzzle_stats.get('success_rate', 0.0)
+
             is_best_f1 = val_metrics['f1'] > best_val_f1
             is_best_top1 = val_metrics['top1_accuracy'] > best_val_top1
+            is_best_puzzle = puzzle_success > best_puzzle_success
 
             if is_best_f1:
                 best_val_f1 = val_metrics['f1']
@@ -1015,23 +1049,28 @@ def run_training_with_tracking_hrm(model, train_loader, val_loader, config, resu
                 best_val_top1 = val_metrics['top1_accuracy']
                 best_top1_epoch = epoch
 
-            tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_f1 or is_best_top1)
+            if is_best_puzzle:
+                best_puzzle_success = puzzle_success
+                best_puzzle_epoch = epoch
+
+            tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_puzzle)
 
             base_log = (f"Epoch {epoch:02d} [{current_dataset}] | "
                        f"Train: L={train_metrics['loss']:.4f} Acc={train_metrics['accuracy']:.3f} P={train_metrics['precision']:.3f} "
                        f"R={train_metrics['recall']:.3f} F1={train_metrics['f1']:.3f} T1={train_metrics['top1_accuracy']:.3f} | "
                        f"Val: L={val_metrics['loss']:.4f} Acc={val_metrics['accuracy']:.3f} P={val_metrics['precision']:.3f} "
-                       f"R={val_metrics['recall']:.3f} F1={val_metrics['f1']:.3f} T1={val_metrics['top1_accuracy']:.3f}")
+                       f"R={val_metrics['recall']:.3f} F1={val_metrics['f1']:.3f} T1={val_metrics['top1_accuracy']:.3f} PS={puzzle_success:.1%}")
             if state0_val_metrics is not None:
                 base_log += (f" | State0-Val: Acc={state0_val_metrics['accuracy']:.3f} P={state0_val_metrics['precision']:.3f} "
                              f"R={state0_val_metrics['recall']:.3f} F1={state0_val_metrics['f1']:.3f} "
                              f"T1={state0_val_metrics['top1_accuracy']:.3f}")
-            base_log += f" | LR={current_lr:.1e} | {'[F1]' if is_best_f1 else ''}{'[T1]' if is_best_top1 else ''}"
+            base_log += f" | LR={current_lr:.1e} | {'[F1]' if is_best_f1 else ''}{'[T1]' if is_best_top1 else ''}{'[PS]' if is_best_puzzle else ''}"
             print(base_log)
 
         print(f"\nHRM training completed!")
         print(f"Best validation F1: {best_val_f1:.4f} (epoch {best_epoch})")
         print(f"Best validation Top-1: {best_val_top1:.4f} (epoch {best_top1_epoch})")
+        print(f"Best puzzle success rate: {best_puzzle_success:.1%} (epoch {best_puzzle_epoch})")
 
         return model, best_val_f1
 

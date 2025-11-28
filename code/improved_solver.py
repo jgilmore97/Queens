@@ -366,3 +366,30 @@ class Solver:
         model_solution = self.solve_puzzle(puzzle)
         backtrack_solution = self.solve_with_vanilla_backtracking(puzzle)
         return np.array_equal(model_solution, backtrack_solution)
+
+
+class LiveModelSolver:
+    """Lightweight wrapper to use a live model with evaluate_full_puzzle_capability."""
+
+    def __init__(self, model, device, is_heterogeneous=True):
+        self.model = model
+        self.device = device
+        self.is_heterogeneous = is_heterogeneous
+        self.max_regions = 11
+
+    def _build_node_features(self, region_board: np.ndarray, queen_board: np.ndarray) -> torch.Tensor:
+        n = region_board.shape[0]
+        N2 = n * n
+        coords = np.indices((n, n)).reshape(2, -1).T.astype(np.float32) / (n - 1)
+        reg_onehot = np.zeros((N2, self.max_regions), dtype=np.float32)
+        flat_ids = region_board.flatten()
+        reg_onehot[np.arange(N2), flat_ids] = 1.0
+        has_queen = queen_board.flatten()[:, None].astype(np.float32)
+        features = np.hstack([coords, reg_onehot, has_queen])
+        return torch.from_numpy(features)
+
+    def _build_edge_index(self, region_board: np.ndarray):
+        edge_index_dict = build_heterogeneous_edge_index(region_board)
+        for edge_type, edge_index in edge_index_dict.items():
+            edge_index_dict[edge_type] = edge_index.to(self.device)
+        return edge_index_dict
