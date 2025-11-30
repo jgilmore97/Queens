@@ -54,15 +54,18 @@ This explicit constraint encoding allows the model to learn specialized attentio
 
 ## Performance
 
-### Validation Metrics
+### Single State Validation Metrics - Single State means evaluated on ability to make a single correct placement based on being given a perfectly filled out board up to that point. IE can model place Queen 5 correctly given it has a board with queens 1-4 placed correctly as input. This Val set does include empty boards as well.
 - F1 Score: 99.36%
 - Top-1 Accuracy: 99.99999%
 
-### Test Results (720 Unseen Puzzles)
-- Perfect-Solve Rate (First-Try): 96.7%
+###  Full Solve Val Results (720 Unseen Official Linkedin Puzzles) - Full Solve refers to the puzzles ability to auto-regressively solve an entire puzzle perfectly. IE if there are 8 queens to be placed, can we auto-regressively run the model 8 times to solve the puzzle with no errors. This set includes 180 official linkedin puzzles that are also augmented via rotation so every puzzle becomes 4 rotations.
+- Perfect-Solve Rate (First-Try): 98.8%
 - Inference Time: ~0.5s per puzzle (CPU)
 - Failure Mode: Errors concentrated in early steps (0-2), indicating ambiguity in initial placements
 - Behavior: Model either solves completely or fails irrecoverably; no partial/recoverable errors
+
+###  Full Solve Test Results (70 More Unseen Official Linkedin Puzzles)
+- Perfect-Solve Rate (First-Try): 100%
 
 ### Key Characteristics
 - No backtracking required; all placements are direct predictions
