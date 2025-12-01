@@ -8,7 +8,7 @@ import os
 
 from model import GAT, HeteroGAT, HRM
 from data_loader import get_homogeneous_loaders, get_queens_loaders
-from train import run_training_with_tracking, run_training_with_tracking_hetero, run_training_with_tracking_hrm
+from train import run_training_with_tracking, run_training_with_tracking_hetero
 from config import Config
 
 MODELS_TO_TRAIN = ['gat', 'hetero_gat', 'hrm']
@@ -236,7 +236,7 @@ def train_hrm_model(device):
     print(f"\nTraining for {config.training.epochs} epochs...")
     if DISABLE_WANDB:
         os.environ['WANDB_MODE'] = 'disabled'
-    model, best_f1 = run_training_with_tracking_hrm(
+    model, best_f1 = run_training_with_tracking_hetero(
         model, train_loader, val_loader, config
     )
     print(f"\n✓ HRM Training Complete! Best F1: {best_f1:.4f}")
