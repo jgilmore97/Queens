@@ -169,7 +169,7 @@ def compare_homogeneous_vs_heterogeneous():
     set_seed(42)
 
     config = Config(**BASELINE_CONFIG)
-    config.data.train_json = "10k_training_set_with_states.json"
+    config.data.train_json = "data/StateTrainingSet.json"
     config.training.epochs = 20
     config.training.batch_size = 512
 

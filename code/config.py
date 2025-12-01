@@ -53,7 +53,7 @@ class TrainingConfig:
     val_ratio: float = 0.10
 
     switch_epoch: int = 5  # Epoch to switch to state-0 dataset (999 = never)
-    state0_json_path: str = "state0_training_states.json"
+    state0_json_path: str = "data/State0TrainingSet.json"
     mixed_ratio: float = 0.75
 
     focal_alpha: float = 0.25
@@ -66,8 +66,8 @@ class TrainingConfig:
 @dataclass
 class DataConfig:
     """Data loading configuration."""
-    train_json: str = "10k_training_set_with_states.json"
-    test_json: str = "test_set_with_states.json"
+    train_json: str = "data/StateTrainingSet.json"
+    test_json: str = "StateValSet.json"
     num_workers: int = 0 if _detect_notebook_environment() else 4
     pin_memory: bool = True
     shuffle_train: bool = True
