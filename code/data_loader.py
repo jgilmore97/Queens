@@ -23,6 +23,42 @@ def build_heterogeneous_edge_index(region: np.ndarray) -> Dict[str, torch.Tensor
         'region_constraint': [],
         'diagonal_constraint': []
     }
+<<<<<<< Updated upstream
+=======
+
+    # Line constraints
+    for r in range(n):
+        for i, j in combinations(idx[r, :], 2):
+            edge_dict['line_constraint'].extend([(i, j), (j, i)])
+
+    for c in range(n):
+        for i, j in combinations(idx[:, c], 2):
+            edge_dict['line_constraint'].extend([(i, j), (j, i)])
+
+    # Region constraints
+    for reg in np.unique(region):
+        nodes = idx[region == reg].ravel()
+        for i, j in combinations(nodes, 2):
+            edge_dict['region_constraint'].extend([(i, j), (j, i)])
+
+    # Diagonal constraints
+    for r in range(n - 1):
+        for c in range(n - 1):
+            # Down right
+            a, b = idx[r, c], idx[r + 1, c + 1]
+            edge_dict['diagonal_constraint'].extend([(a, b), (b, a)])
+        for c in range(1, n):
+            # Down left
+            a, b = idx[r, c], idx[r + 1, c - 1]
+            edge_dict['diagonal_constraint'].extend([(a, b), (b, a)])
+
+    hetero_edge_index = {}
+    for edge_type, edges in edge_dict.items():
+        if edges:
+            hetero_edge_index[edge_type] = torch.tensor(edges, dtype=torch.long).t().contiguous()
+        else:
+            hetero_edge_index[edge_type] = torch.empty((2, 0), dtype=torch.long)
+>>>>>>> Stashed changes
 
     # Line constraints
     for r in range(n):
