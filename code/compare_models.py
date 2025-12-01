@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 import json
-import time
 from tqdm.auto import tqdm
 from collections import defaultdict
 from typing import Dict, Any, List
@@ -13,11 +12,9 @@ from typing import Dict, Any, List
 from model import GAT, HeteroGAT, HRM
 from data_loader import (
     get_homogeneous_loaders,
-    get_queens_loaders,
-    filter_dataset_to_step0,
-    hetero_to_homogeneous
+    get_queens_loaders
 )
-from improved_solver import Solver
+from solver import Solver
 from evaluation_util import evaluate_full_puzzle_capability
 
 CHECKPOINT_BASE_DIR = 'checkpoints/comparison'

@@ -1,21 +1,15 @@
-import cv2
 import numpy as np
-import argparse
 import json
 
 from PIL import Image
-from sklearn.cluster import KMeans
 import random
 
 from collections import deque, Counter, defaultdict
 import copy
-from copy import deepcopy
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 
-import os
-import time
 from tqdm import tqdm
 
 def detect_grid_size_by_black_lines(

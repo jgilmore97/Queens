@@ -3,10 +3,8 @@
 import os
 import time
 import psutil
-import random
 from pathlib import Path
-from typing import Dict, Any, Optional, List
-from collections import defaultdict, deque
+from typing import Dict, Any, Optional
 
 import torch
 import numpy as np

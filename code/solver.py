@@ -2,7 +2,6 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
-import matplotlib.patches as mpatches
 from typing import Dict, List, Tuple, Optional
 from pathlib import Path
 

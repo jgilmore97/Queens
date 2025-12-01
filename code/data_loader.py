@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import re
-from itertools import combinations
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -11,89 +11,99 @@ import numpy as np
 import torch
 from torch_geometric.data import Data, HeteroData, Dataset
 from torch_geometric.loader import DataLoader
-from torch_geometric.transforms import ToUndirected
+from data_loader import QueensDataset, _split_by_img
+
+# Edge index cache: maps region hash -> edge index dict
+_edge_index_cache: Dict[str, Dict[str, torch.Tensor]] = {}
+
+
+def _region_hash(region: np.ndarray) -> str:
+    """Create a hash key from the region array."""
+    return hashlib.md5(region.tobytes()).hexdigest()
+
 
 def build_heterogeneous_edge_index(region: np.ndarray) -> Dict[str, torch.Tensor]:
-    """Return dictionary of edge_index tensors for each constraint type."""
+    """Return dictionary of edge_index tensors for each constraint type.
+
+    Vectorized implementation for improved performance.
+    """
     n = region.shape[0]
     idx = np.arange(n * n, dtype=np.int64).reshape(n, n)
 
-    edge_dict = {
-        'line_constraint': [],
-        'region_constraint': [],
-        'diagonal_constraint': []
+    # Down-right diagonals: (r, c) <-> (r+1, c+1)
+    a_dr = idx[:-1, :-1].ravel()
+    b_dr = idx[1:, 1:].ravel()
+    # Down-left diagonals: (r, c) <-> (r+1, c-1)
+    a_dl = idx[:-1, 1:].ravel()
+    b_dl = idx[1:, :-1].ravel()
+    # Both directions for each edge
+    diag_src = np.concatenate([a_dr, b_dr, a_dl, b_dl])
+    diag_tgt = np.concatenate([b_dr, a_dr, b_dl, a_dl])
+    diagonal_edges = np.stack([diag_src, diag_tgt], axis=0)
+
+    # Upper triangle indices for pairwise combinations within rows/columns
+    i_idx, j_idx = np.triu_indices(n, k=1)
+
+    # Row constraints: for each row r, connect idx[r, i] <-> idx[r, j]
+    row_src = idx[:, i_idx].ravel()
+    row_tgt = idx[:, j_idx].ravel()
+
+    # Column constraints: for each col c, connect idx[i, c] <-> idx[j, c]
+    col_src = idx[i_idx, :].ravel()
+    col_tgt = idx[j_idx, :].ravel()
+
+    # Both directions for each edge
+    line_src = np.concatenate([row_src, row_tgt, col_src, col_tgt])
+    line_tgt = np.concatenate([row_tgt, row_src, col_tgt, col_src])
+    line_edges = np.stack([line_src, line_tgt], axis=0)
+
+    region_edge_list = []
+    for reg in np.unique(region):
+        nodes = idx[region == reg].ravel()
+        k = len(nodes)
+        if k > 1:
+            # Pairwise combinations
+            ri, rj = np.triu_indices(k, k=1)
+            src = nodes[ri]
+            tgt = nodes[rj]
+            # Both directions
+            region_edge_list.append(np.stack([
+                np.concatenate([src, tgt]),
+                np.concatenate([tgt, src])
+            ], axis=0))
+
+    if region_edge_list:
+        region_edges = np.concatenate(region_edge_list, axis=1)
+    else:
+        region_edges = np.empty((2, 0), dtype=np.int64)
+
+    hetero_edge_index = {
+        'line_constraint': torch.from_numpy(line_edges).contiguous(),
+        'region_constraint': torch.from_numpy(region_edges).contiguous(),
+        'diagonal_constraint': torch.from_numpy(diagonal_edges).contiguous(),
     }
-<<<<<<< Updated upstream
-=======
-
-    # Line constraints
-    for r in range(n):
-        for i, j in combinations(idx[r, :], 2):
-            edge_dict['line_constraint'].extend([(i, j), (j, i)])
-
-    for c in range(n):
-        for i, j in combinations(idx[:, c], 2):
-            edge_dict['line_constraint'].extend([(i, j), (j, i)])
-
-    # Region constraints
-    for reg in np.unique(region):
-        nodes = idx[region == reg].ravel()
-        for i, j in combinations(nodes, 2):
-            edge_dict['region_constraint'].extend([(i, j), (j, i)])
-
-    # Diagonal constraints
-    for r in range(n - 1):
-        for c in range(n - 1):
-            # Down right
-            a, b = idx[r, c], idx[r + 1, c + 1]
-            edge_dict['diagonal_constraint'].extend([(a, b), (b, a)])
-        for c in range(1, n):
-            # Down left
-            a, b = idx[r, c], idx[r + 1, c - 1]
-            edge_dict['diagonal_constraint'].extend([(a, b), (b, a)])
-
-    hetero_edge_index = {}
-    for edge_type, edges in edge_dict.items():
-        if edges:
-            hetero_edge_index[edge_type] = torch.tensor(edges, dtype=torch.long).t().contiguous()
-        else:
-            hetero_edge_index[edge_type] = torch.empty((2, 0), dtype=torch.long)
->>>>>>> Stashed changes
-
-    # Line constraints
-    for r in range(n):
-        for i, j in combinations(idx[r, :], 2):
-            edge_dict['line_constraint'].extend([(i, j), (j, i)])
-
-    for c in range(n):
-        for i, j in combinations(idx[:, c], 2):
-            edge_dict['line_constraint'].extend([(i, j), (j, i)])
-
-    # Region constraints
-    for reg in np.unique(region):
-        nodes = idx[region == reg].ravel()
-        for i, j in combinations(nodes, 2):
-            edge_dict['region_constraint'].extend([(i, j), (j, i)])
-
-    # Diagonal constraints
-    for r in range(n - 1):
-        for c in range(n - 1):
-            # Down right
-            a, b = idx[r, c], idx[r + 1, c + 1]
-            edge_dict['diagonal_constraint'].extend([(a, b), (b, a)])
-        for c in range(1, n):
-            # Down left
-            a, b = idx[r, c], idx[r + 1, c - 1]
-            edge_dict['diagonal_constraint'].extend([(a, b), (b, a)])
-
-    hetero_edge_index = {}
-    for edge_type, edges in edge_dict.items():
-        if edges:
-            hetero_edge_index[edge_type] = torch.tensor(edges, dtype=torch.long).t().contiguous()
-        else:
-            hetero_edge_index[edge_type] = torch.empty((2, 0), dtype=torch.long)
 
     return hetero_edge_index
+
+
+def build_heterogeneous_edge_index_cached(region: np.ndarray) -> Dict[str, torch.Tensor]:
+    """Cached version of build_heterogeneous_edge_index.
+
+    Computes edge indices only once per unique region layout.
+    """
+    key = _region_hash(region)
+
+    if key not in _edge_index_cache:
+        _edge_index_cache[key] = build_heterogeneous_edge_index(region)
+
+    return _edge_index_cache[key]
+
+
+def clear_edge_index_cache() -> int:
+    """Clear the edge index cache and return number of entries removed."""
+    count = len(_edge_index_cache)
+    _edge_index_cache.clear()
+    return count
 
 
 def _canonical_img_key(src: str) -> str:
@@ -194,7 +204,7 @@ class QueensDataset(Dataset):
 
         y = torch.from_numpy(label.flatten().astype(np.int64))                     # (N²,)
 
-        hetero_edge_index = build_heterogeneous_edge_index(region)
+        hetero_edge_index = build_heterogeneous_edge_index_cached(region)
 
         data = HeteroData()
 
@@ -301,11 +311,9 @@ class MixedDataset(Dataset):
 
 def create_filtered_old_dataset(json_path, val_ratio, seed, split="train"):
     """Create dataset from old multi-state data with iteration != 0 filtered out."""
-    from data_loader import QueensDataset
-
     full_dataset = QueensDataset(
         json_path,
-        split="all",
+        split="train",
         val_ratio=val_ratio,
         seed=seed
     )
@@ -321,11 +329,9 @@ def create_filtered_old_dataset(json_path, val_ratio, seed, split="train"):
     filtered_dataset.__dict__.update(full_dataset.__dict__)
 
     if split == "train":
-        from data_loader import _split_by_img
         train_records, val_records = _split_by_img(filtered_records, val_ratio, seed)
         filtered_dataset.records = train_records
     elif split == "val":
-        from data_loader import _split_by_img
         train_records, val_records = _split_by_img(filtered_records, val_ratio, seed)
         filtered_dataset.records = val_records
     else:
@@ -339,7 +345,6 @@ def hetero_to_homogeneous(hetero_data: HeteroData) -> Data:
     This allows training homogeneous models (GAT, GNN) on heterogeneous graph data.
     All edge types (line, region, diagonal constraints) are merged into a single edge_index.
     """
-    # Extract node features and labels
     x = hetero_data['cell'].x
     y = hetero_data['cell'].y
 

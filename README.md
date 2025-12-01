@@ -110,7 +110,7 @@ code
 ├── evaluation_util.py           # Utility functions for puzzle evaluation
 ├── experiment_tracker_fixed.py  # Weights & Biases logging and checkpointing
 ├── solver.py                    # Traditional backtracking solver (reference/validation)
-└── improved_solver.py           # Enhanced solver with cycle detection and memoization
+└── solver.py           # Enhanced solver with cycle detection and memoization
 ```
 
 ## Training Details
