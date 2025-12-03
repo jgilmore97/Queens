@@ -11,7 +11,8 @@ import numpy as np
 import torch
 from torch_geometric.data import Data, HeteroData, Dataset
 from torch_geometric.loader import DataLoader
-from data_loader import QueensDataset, _split_by_img
+from torch.utils.data import Dataset as vanillaDataset, DataLoader as vanillaDataLoader
+
 
 # Edge index cache: maps region hash -> edge index dict
 _edge_index_cache: Dict[str, Dict[str, torch.Tensor]] = {}
@@ -474,3 +475,115 @@ def create_filtered_old_dataset_homogeneous(json_path, val_ratio, seed, split="t
         filtered_dataset.records = filtered_records
 
     return filtered_dataset
+
+class BenchmarkDataset(vanillaDataset):
+    """Secondary dataset for a non graph based model to be used for benchmarking."""
+    def __init__(
+        self,
+        json_path: str | Path,
+        *,
+        split: str = "train",
+        val_ratio: float = 0.2,
+        seed: int = 42,
+        transform=None,
+        pre_transform=None,
+    ):
+        if split not in {"train", "val", "all"}:
+            raise ValueError("split must be 'train', 'val', or 'all'")
+
+        super().__init__(None, transform, pre_transform)
+
+        self.json_path = Path(json_path).expanduser()
+        self.val_ratio = val_ratio
+        self.seed = seed
+
+        records = json.loads(self.json_path.read_text())
+        train_records, val_records = _split_by_img(records, val_ratio, seed)
+
+        self.records = (
+            train_records if split == "train"
+            else val_records if split == "val"
+            else train_records + val_records
+        )
+
+        self.max_regions = 11
+
+    def len(self) -> int:
+        return len(self.records)
+
+    def get(self, idx: int) -> dict:
+        e = self.record[idx]
+
+        region  = np.asarray(e["region"],        dtype=np.int64)   # (n, n)
+        partial = np.asarray(e["partial_board"], dtype=np.int64)   # (n, n)
+        label   = np.asarray(e["label_board"],   dtype=np.int64)   # (n, n)
+        n       = region.shape[0]
+        N2      = n * n 
+
+        #padding region to max size
+        region_padded = self.pad(region, target_size=11, pad_with=-1)
+        partial_padded = self.pad(partial, target_size=11, pad_with=0)
+        label_padded = self.pad(label, target_size=11, pad_with=-100)
+
+        coords = np.indices((self.max_regions, self.max_regions)).reshape(2, -1).T.astype(np.float32) / (self.max_regions - 1)  # (N², 2)
+        reg_onehot = np.zeros((self.max_regions * self.max_regions, self.max_regions), dtype=np.float32)
+        flat_ids   = region_padded.flatten()
+        valid_mask = flat_ids != -1
+        reg_onehot[np.arange(self.max_regions * self.max_regions)[valid_mask], flat_ids[valid_mask]] = 1.0                                  # (N², R)
+
+        has_q = partial_padded.flatten()[:, None].astype(np.float32) # (N², 1)
+        
+        x = np.hstack([coords, reg_onehot, has_q]) # (N², 2+R+1)
+        y = label_padded.flatten().astype(np.int64) # (N²,)
+
+        sample = {
+            "x": torch.from_numpy(x),               # (N², 2+R+1)
+            "y": torch.from_numpy(y),               # (N²,)
+            "n": n,
+            "meta": dict(source=e["source"], iteration=e["iteration"])
+        }
+        return sample
+ 
+    def pad(self, board: np.ndarray, target_size: int, pad_with: int) -> np.ndarray:
+        """Pad the board to the target size with -1."""
+        n = board.shape[0]
+        if n >= target_size:
+            return board
+        padded_board = pad_with * np.ones((target_size, target_size), dtype=board.dtype)
+        padded_board[:n, :n] = board
+        return padded_board
+    
+def get_benchmark_loaders(
+    json_path: str,
+    *,
+    batch_size: int = 512,
+    val_ratio: float = 0.10,
+    seed: int = 42,
+    num_workers: int = 0,
+    pin_memory: bool = True,
+    shuffle_train: bool = True,
+):
+    """Return (train_loader, val_loader) for benchmark dataset."""
+    ds_train = BenchmarkDataset(
+        json_path,
+        split="train",
+        val_ratio=val_ratio,
+        seed=seed,
+    )
+    ds_val = BenchmarkDataset(
+        json_path,
+        split="val",
+        val_ratio=val_ratio,
+        seed=seed,
+    )
+
+    kwargs = dict(
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
+
+    train_loader = vanillaDataLoader(ds_train, shuffle=shuffle_train, **kwargs)
+    val_loader = vanillaDataLoader(ds_val, shuffle=False, **kwargs)
+
+    return train_loader, val_loader
