@@ -484,14 +484,12 @@ class BenchmarkDataset(vanillaDataset):
         *,
         split: str = "train",
         val_ratio: float = 0.2,
-        seed: int = 42,
-        transform=None,
-        pre_transform=None,
+        seed: int = 42
     ):
         if split not in {"train", "val", "all"}:
             raise ValueError("split must be 'train', 'val', or 'all'")
 
-        super().__init__(None, transform, pre_transform)
+        super().__init__()
 
         self.json_path = Path(json_path).expanduser()
         self.val_ratio = val_ratio
@@ -508,10 +506,10 @@ class BenchmarkDataset(vanillaDataset):
 
         self.max_regions = 11
 
-    def len(self) -> int:
+    def __len__(self) -> int:
         return len(self.records)
 
-    def get(self, idx: int) -> dict:
+    def __getitem__(self, idx: int) -> dict:
         e = self.record[idx]
 
         region  = np.asarray(e["region"],        dtype=np.int64)   # (n, n)
