@@ -510,7 +510,7 @@ class BenchmarkDataset(vanillaDataset):
         return len(self.records)
 
     def __getitem__(self, idx: int) -> dict:
-        e = self.record[idx]
+        e = self.records[idx]
 
         region  = np.asarray(e["region"],        dtype=np.int64)   # (n, n)
         partial = np.asarray(e["partial_board"], dtype=np.int64)   # (n, n)
