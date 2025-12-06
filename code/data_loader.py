@@ -273,12 +273,12 @@ class MixedDataset(Dataset):
         self.ratio1 = ratio1
         self.seed = seed
 
-        # Compute epoch length to see all samples from both datasets
-        # Use the larger effective size to ensure full coverage
         n1, n2 = len(dataset1), len(dataset2)
-        epoch_len_for_d1 = int(n1 / ratio1) if ratio1 > 0 else n2
-        epoch_len_for_d2 = int(n2 / (1 - ratio1)) if ratio1 < 1 else n1
-        self._len = max(epoch_len_for_d1, epoch_len_for_d2)
+
+        # Epoch length based on primary dataset (dataset1)
+        # This ensures we see all of dataset1 each epoch at the given ratio
+        # Dataset2 samples cycle across epochs if it's larger
+        self._len = int(n1 / ratio1) if ratio1 > 0 else n2
 
         # Build the interleaved index list
         self._build_index_list()
