@@ -170,9 +170,14 @@ class HeteroGAT(nn.Module):
         for layer_idx in self.input_injection_layers:
             self.input_projections[str(layer_idx)] = nn.Linear(input_dim, hidden_dim)
 
-    def forward(self, x_dict, edge_index_dict):
-        """Forward pass with multi-stage global context injection for Type 2 error prevention."""
+    def forward(self, x_dict, edge_index_dict, batch=None):
+        """Forward pass with multi-stage global context injection for Type 2 error prevention.
 
+        Args:
+            x_dict: dict with 'cell' key containing node features
+            edge_index_dict: dict of edge indices per constraint type
+            batch: unused, for API compatibility with HRM
+        """
         original_input = x_dict['cell']
 
         x_dict = self.conv1(x_dict, edge_index_dict)
@@ -279,9 +284,23 @@ class _FiLM(nn.Module):
             nn.Linear(2 * hidden_dim, 2 * hidden_dim),
         )
 
-    def forward(self, nodes, z_h):
-        gamma, beta = self.mlp(z_h).chunk(2, dim=-1)
-        return gamma * nodes + beta
+    def forward(self, nodes, z_h, batch=None):
+        """
+        nodes: [C, d] node features
+        z_h: [B, d] per-graph global vectors (or [d] for single graph)
+        batch: [C] graph assignment for each node (None if single graph)
+        """
+        if batch is None:
+            # Single graph case (inference or batch_size=1)
+            gamma, beta = self.mlp(z_h).chunk(2, dim=-1)
+            return gamma * nodes + beta
+        else:
+            # Batched case: index z_h per-node
+            film_out = self.mlp(z_h)  # [B, 2d]
+            gamma, beta = film_out.chunk(2, dim=-1)  # [B, d] each
+            gamma_per_node = gamma[batch]  # [C, d]
+            beta_per_node = beta[batch]    # [C, d]
+            return gamma_per_node * nodes + beta_per_node
 
 
 class _LBlock(nn.Module):
@@ -349,11 +368,12 @@ class _LBlock(nn.Module):
             x_new = bn(x_new)
         return self.relu(x_old + self.drop(x_new))
 
-    def forward(self, x_cell, edge_index_dict, z_h, x_cell_embedded=None):
+    def forward(self, x_cell, edge_index_dict, z_h, x_cell_embedded=None, batch=None):
         """
         x_cell: [C, d] current node states
-        z_h: [d] global vector (fixed during this micro-step)
+        z_h: [B, d] per-graph global vectors (or [d] for single graph)
         x_cell_embedded: [C, d] embedded original input for injection
+        batch: [C] graph assignment for each node (None if single graph)
         """
         x_dict = {'cell': x_cell}
 
@@ -371,7 +391,7 @@ class _LBlock(nn.Module):
         if self.use_input_injection and x_cell_embedded is not None:
             x3 = x3 + self.input_proj(x_cell_embedded)
 
-        x3 = self.film(x3, z_h)
+        x3 = self.film(x3, z_h, batch=batch)
         return x3
 
 
@@ -397,30 +417,73 @@ class _HModule(nn.Module):
         )
         self.norm = _RMSNorm(hidden_dim)
 
-    def forward(self, nodes, z_prev, return_attention=False):
+    def forward(self, nodes, z_prev, batch=None, num_graphs=None, return_attention=False):
         """
         nodes: [C, d] all node states
-        z_prev: [d] previous global state
+        z_prev: [B, d] per-graph previous global states (or [d] for single graph)
+        batch: [C] graph assignment for each node (None if single graph)
+        num_graphs: int, number of graphs in batch (required if batch is provided)
         """
         C, d = nodes.shape
 
-        Q = self.query(z_prev).view(1, self.num_heads, self.head_dim)  # [1, H, d/H]
-        K = self.key(nodes).view(C, self.num_heads, self.head_dim)     # [C, H, d/H]
-        V = self.value(nodes).view(C, self.num_heads, self.head_dim)   # [C, H, d/H]
+        if batch is None:
+            # Single graph case (original behavior)
+            Q = self.query(z_prev).view(1, self.num_heads, self.head_dim)  # [1, H, d/H]
+            K = self.key(nodes).view(C, self.num_heads, self.head_dim)     # [C, H, d/H]
+            V = self.value(nodes).view(C, self.num_heads, self.head_dim)   # [C, H, d/H]
 
-        attn_scores = torch.einsum('qhd,chd->hc', Q, K) / (self.head_dim ** 0.5)  # [H, C]
-        attn_weights = torch.softmax(attn_scores, dim=-1)  # [H, C]
+            attn_scores = torch.einsum('qhd,chd->hc', Q, K) / (self.head_dim ** 0.5)  # [H, C]
+            attn_weights = torch.softmax(attn_scores, dim=-1)  # [H, C]
 
-        pooled_heads = torch.einsum('hc,chd->hd', attn_weights, V)  # [H, d/H]
-        pooled = pooled_heads.reshape(self.hidden_dim)  # [d]
+            pooled_heads = torch.einsum('hc,chd->hd', attn_weights, V)  # [H, d/H]
+            pooled = pooled_heads.reshape(self.hidden_dim)  # [d]
 
-        z = torch.cat([pooled, z_prev], dim=-1)  # [2d]
-        z_out = self.norm(self.mlp(z))  # [d]
+            z = torch.cat([pooled, z_prev], dim=-1)  # [2d]
+            z_out = self.norm(self.mlp(z))  # [d]
 
-        if return_attention:
-            avg_attention = attn_weights.mean(dim=0)  # [C]
-            return z_out, avg_attention
-        return z_out
+            if return_attention:
+                avg_attention = attn_weights.mean(dim=0)  # [C]
+                return z_out, avg_attention
+            return z_out
+        else:
+            # Batched case: pool per-graph
+            B = num_graphs
+            H = self.num_heads
+            hd = self.head_dim
+
+            # Project all nodes
+            K = self.key(nodes).view(C, H, hd)    # [C, H, d/H]
+            V = self.value(nodes).view(C, H, hd)  # [C, H, d/H]
+
+            # Per-graph queries from z_prev [B, d]
+            Q = self.query(z_prev).view(B, H, hd)  # [B, H, d/H]
+
+            # Compute attention scores per-graph
+            # For each node c, compute score with its graph's query
+            Q_per_node = Q[batch]  # [C, H, d/H]
+            attn_scores = (Q_per_node * K).sum(dim=-1) / (hd ** 0.5)  # [C, H]
+
+            # Softmax per-graph: need to mask and normalize within each graph
+            # Use scatter_softmax from torch_geometric
+            from torch_geometric.utils import softmax as pyg_softmax
+            attn_weights = pyg_softmax(attn_scores, batch, num_nodes=C)  # [C, H]
+
+            # Weighted values
+            weighted_V = attn_weights.unsqueeze(-1) * V  # [C, H, d/H]
+
+            # Scatter-add to pool per-graph
+            from torch_scatter import scatter_add
+            pooled = scatter_add(weighted_V, batch, dim=0, dim_size=B)  # [B, H, d/H]
+            pooled = pooled.reshape(B, self.hidden_dim)  # [B, d]
+
+            # Combine with previous z
+            z = torch.cat([pooled, z_prev], dim=-1)  # [B, 2d]
+            z_out = self.norm(self.mlp(z))  # [B, d]
+
+            if return_attention:
+                avg_attention = attn_weights.mean(dim=1)  # [C]
+                return z_out, avg_attention
+            return z_out
 
 
 class _Readout(nn.Module):
@@ -434,8 +497,18 @@ class _Readout(nn.Module):
             nn.Linear(hidden_dim, 1),
         )
 
-    def forward(self, nodes, z_h):
-        z_tiled = z_h.unsqueeze(0).expand_as(nodes)
+    def forward(self, nodes, z_h, batch=None):
+        """
+        nodes: [C, d] node features
+        z_h: [B, d] per-graph global vectors (or [d] for single graph)
+        batch: [C] graph assignment for each node (None if single graph)
+        """
+        if batch is None:
+            # Single graph case
+            z_tiled = z_h.unsqueeze(0).expand_as(nodes)
+        else:
+            # Batched case: index z_h per-node
+            z_tiled = z_h[batch]  # [C, d]
         return self.mlp(torch.cat([nodes, z_tiled], dim=-1)).squeeze(-1)
 
 
@@ -496,15 +569,32 @@ class HRM(nn.Module):
         else:
             self.register_buffer("z0", torch.zeros(hidden_dim), persistent=False)
 
-    def forward(self, x_dict, edge_index_dict, return_intermediates=False):
+    def forward(self, x_dict, edge_index_dict, batch=None, return_intermediates=False):
         """
         Forward pass through hierarchical L/H architecture.
-        Returns logits [C] or (logits, intermediates) if return_intermediates=True.
+
+        Args:
+            x_dict: dict with 'cell' key containing node features [C, input_dim]
+            edge_index_dict: dict of edge indices per constraint type
+            batch: [C] tensor with graph assignment for each node (None for single graph)
+            return_intermediates: if True, return intermediate states for visualization
+
+        Returns:
+            logits [C] or (logits, intermediates) if return_intermediates=True.
         """
         x_in = x_dict['cell']
         nodes_embedded = self.embed(x_in)
         nodes = nodes_embedded
-        z = self.z0
+
+        # Determine batch size and initialize z_H
+        if batch is None:
+            # Single graph (inference or batch_size=1)
+            z = self.z0  # [d]
+            num_graphs = None
+        else:
+            # Batched training: per-graph z_H
+            num_graphs = batch.max().item() + 1
+            z = self.z0.unsqueeze(0).expand(num_graphs, -1).clone()  # [B, d]
 
         if return_intermediates:
             L_states = []
@@ -527,20 +617,21 @@ class HRM(nn.Module):
                     nodes,
                     edge_index_dict,
                     z,
-                    x_cell_embedded=nodes_embedded if self.use_input_injection else None
+                    x_cell_embedded=nodes_embedded if self.use_input_injection else None,
+                    batch=batch
                 )
 
                 if return_intermediates:
                     L_states.append(nodes.detach().cpu())
 
             if return_intermediates:
-                z, attention = self.h_mod(nodes, z, return_attention=True)
+                z, attention = self.h_mod(nodes, z, batch=batch, num_graphs=num_graphs, return_attention=True)
                 H_attention.append(attention.detach().cpu())
                 z_H_history.append(z.detach().cpu())
             else:
-                z = self.h_mod(nodes, z, return_attention=False)
+                z = self.h_mod(nodes, z, batch=batch, num_graphs=num_graphs, return_attention=False)
 
-        logits = self.readout(nodes, z)
+        logits = self.readout(nodes, z, batch=batch)
 
         if return_intermediates:
             intermediates = {
@@ -549,7 +640,7 @@ class HRM(nn.Module):
                 'z_H_history': z_H_history,     # List of tensors (n_cycles + 1)
                 'film_params': film_params,     # List of dicts with gamma, beta
                 'final_logits': logits.detach().cpu(),
-                'board_size': int(x_in.shape[0] ** 0.5)
+                'board_size': int(x_in.shape[0] ** 0.5) if batch is None else None
             }
             return logits, intermediates
 

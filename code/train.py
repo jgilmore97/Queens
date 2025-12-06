@@ -221,8 +221,13 @@ def train_epoch_hetero(model, loader, criterion, optimizer, device, epoch):
         batch = batch.to(device)
         optimizer.zero_grad()
 
+        # Extract batch indices for per-graph z_H in HRM
+        cell_batch = None
+        if hasattr(batch['cell'], 'batch'):
+            cell_batch = batch['cell'].batch
+
         if hasattr(batch, 'x_dict'):
-            logits = model(batch.x_dict, batch.edge_index_dict)
+            logits = model(batch.x_dict, batch.edge_index_dict, batch=cell_batch)
             labels = batch.y_dict['cell']
             num_nodes = batch['cell'].num_nodes
         else:
@@ -232,7 +237,7 @@ def train_epoch_hetero(model, loader, criterion, optimizer, device, epoch):
                 ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
                 ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
             }
-            logits = model(x_dict, edge_index_dict)
+            logits = model(x_dict, edge_index_dict, batch=cell_batch)
             labels = batch['cell'].y
             num_nodes = len(labels)
 
@@ -420,8 +425,13 @@ def evaluate_epoch_hetero(model, loader, criterion, device, epoch):
     for batch in pbar:
         batch = batch.to(device)
 
+        # Extract batch indices for per-graph z_H in HRM
+        cell_batch = None
+        if hasattr(batch['cell'], 'batch'):
+            cell_batch = batch['cell'].batch
+
         if hasattr(batch, 'x_dict'):
-            logits = model(batch.x_dict, batch.edge_index_dict)
+            logits = model(batch.x_dict, batch.edge_index_dict, batch=cell_batch)
             labels = batch.y_dict['cell']
             num_nodes = batch['cell'].num_nodes
         else:
@@ -431,7 +441,7 @@ def evaluate_epoch_hetero(model, loader, criterion, device, epoch):
                 ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
                 ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
             }
-            logits = model(x_dict, edge_index_dict)
+            logits = model(x_dict, edge_index_dict, batch=cell_batch)
             labels = batch['cell'].y
             num_nodes = len(labels)
 
