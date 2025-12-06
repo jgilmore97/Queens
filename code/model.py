@@ -463,17 +463,18 @@ class _HModule(nn.Module):
             Q_per_node = Q[batch]  # [C, H, d/H]
             attn_scores = (Q_per_node * K).sum(dim=-1) / (hd ** 0.5)  # [C, H]
 
-            # Softmax per-graph: need to mask and normalize within each graph
-            # Use scatter_softmax from torch_geometric
+            # Softmax per-graph using torch_geometric's softmax (has pure-torch fallback)
             from torch_geometric.utils import softmax as pyg_softmax
             attn_weights = pyg_softmax(attn_scores, batch, num_nodes=C)  # [C, H]
 
             # Weighted values
             weighted_V = attn_weights.unsqueeze(-1) * V  # [C, H, d/H]
 
-            # Scatter-add to pool per-graph
-            from torch_scatter import scatter_add
-            pooled = scatter_add(weighted_V, batch, dim=0, dim_size=B)  # [B, H, d/H]
+            # Scatter-add to pool per-graph using pure PyTorch
+            # Expand batch indices for broadcasting: [C] -> [C, H, hd]
+            batch_expanded = batch.view(C, 1, 1).expand(-1, H, hd)
+            pooled = torch.zeros(B, H, hd, device=nodes.device, dtype=nodes.dtype)
+            pooled.scatter_add_(0, batch_expanded, weighted_V)  # [B, H, d/H]
             pooled = pooled.reshape(B, self.hidden_dim)  # [B, d]
 
             # Combine with previous z
