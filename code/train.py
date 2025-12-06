@@ -177,7 +177,6 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch):
             'top1': f'{current_top1:.3f}'
         })
 
-
     eps = 1e-9
     avg_loss = total_loss / total_nodes
     accuracy = correct / total_nodes
@@ -274,7 +273,6 @@ def train_epoch_hetero(model, loader, criterion, optimizer, device, epoch):
             'acc': f'{current_acc:.3f}',
             'top1': f'{current_top1:.3f}'
         })
-
 
     eps = 1e-9
     avg_loss = total_loss / total_nodes
