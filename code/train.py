@@ -221,8 +221,13 @@ def train_epoch_hetero(model, loader, criterion, optimizer, device, epoch):
         batch = batch.to(device)
         optimizer.zero_grad()
 
+        # Extract batch indices for per-graph z_H in HRM
+        cell_batch = None
+        if hasattr(batch['cell'], 'batch'):
+            cell_batch = batch['cell'].batch
+
         if hasattr(batch, 'x_dict'):
-            logits = model(batch.x_dict, batch.edge_index_dict)
+            logits = model(batch.x_dict, batch.edge_index_dict, batch=cell_batch)
             labels = batch.y_dict['cell']
             num_nodes = batch['cell'].num_nodes
         else:
@@ -232,7 +237,7 @@ def train_epoch_hetero(model, loader, criterion, optimizer, device, epoch):
                 ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
                 ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
             }
-            logits = model(x_dict, edge_index_dict)
+            logits = model(x_dict, edge_index_dict, batch=cell_batch)
             labels = batch['cell'].y
             num_nodes = len(labels)
 
@@ -420,8 +425,13 @@ def evaluate_epoch_hetero(model, loader, criterion, device, epoch):
     for batch in pbar:
         batch = batch.to(device)
 
+        # Extract batch indices for per-graph z_H in HRM
+        cell_batch = None
+        if hasattr(batch['cell'], 'batch'):
+            cell_batch = batch['cell'].batch
+
         if hasattr(batch, 'x_dict'):
-            logits = model(batch.x_dict, batch.edge_index_dict)
+            logits = model(batch.x_dict, batch.edge_index_dict, batch=cell_batch)
             labels = batch.y_dict['cell']
             num_nodes = batch['cell'].num_nodes
         else:
@@ -431,7 +441,7 @@ def evaluate_epoch_hetero(model, loader, criterion, device, epoch):
                 ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
                 ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
             }
-            logits = model(x_dict, edge_index_dict)
+            logits = model(x_dict, edge_index_dict, batch=cell_batch)
             labels = batch['cell'].y
             num_nodes = len(labels)
 
@@ -552,6 +562,12 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
         best_epoch = 0
         best_top1_epoch = 0
 
+        # Separate trackers for state0 metrics after switch
+        best_state0_f1 = 0.0
+        best_state0_top1 = 0.0
+        best_state0_f1_epoch = 0
+        best_state0_top1_epoch = 0
+
         mixed_train_loader, state0_val_loader = None, None
         current_dataset = "multi-state"
         switched = False
@@ -667,16 +683,31 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
                 device=device
             )
 
-            is_best_f1 = val_metrics['f1'] > best_val_f1
-            is_best_top1 = val_metrics['top1_accuracy'] > best_val_top1
+            # After switch, use state0 metrics for best model selection (with separate tracker)
+            if switched and state0_val_metrics is not None:
+                is_best_f1 = state0_val_metrics['f1'] > best_state0_f1
+                is_best_top1 = state0_val_metrics['top1_accuracy'] > best_state0_top1
+                metric_source = "State0"
 
-            if is_best_f1:
-                best_val_f1 = val_metrics['f1']
-                best_epoch = epoch
+                if is_best_f1:
+                    best_state0_f1 = state0_val_metrics['f1']
+                    best_state0_f1_epoch = epoch
 
-            if is_best_top1:
-                best_val_top1 = val_metrics['top1_accuracy']
-                best_top1_epoch = epoch
+                if is_best_top1:
+                    best_state0_top1 = state0_val_metrics['top1_accuracy']
+                    best_state0_top1_epoch = epoch
+            else:
+                is_best_f1 = val_metrics['f1'] > best_val_f1
+                is_best_top1 = val_metrics['top1_accuracy'] > best_val_top1
+                metric_source = "Val"
+
+                if is_best_f1:
+                    best_val_f1 = val_metrics['f1']
+                    best_epoch = epoch
+
+                if is_best_top1:
+                    best_val_top1 = val_metrics['top1_accuracy']
+                    best_top1_epoch = epoch
 
             tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_f1 or is_best_top1)
 
@@ -687,12 +718,17 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
             if state0_val_metrics is not None:
                 base_log += f" | State0-Val: Acc={state0_val_metrics['accuracy']:.3f} F1={state0_val_metrics['f1']:.3f} T1={state0_val_metrics['top1_accuracy']:.3f}"
 
-            base_log += f" | LR={current_lr:.1e} | {'🎯F1' if is_best_f1 else ''}{'🎯T1' if is_best_top1 else ''}"
+            best_marker = f"🎯{metric_source}-F1" if is_best_f1 else ""
+            best_marker += f"🎯{metric_source}-T1" if is_best_top1 else ""
+            base_log += f" | LR={current_lr:.1e} | {best_marker}"
             print(base_log)
 
         print(f"\nTraining completed!")
         print(f"Best validation F1: {best_val_f1:.4f} (epoch {best_epoch})")
         print(f"Best validation Top-1 Accuracy: {best_val_top1:.4f} (epoch {best_top1_epoch})")
+        if best_state0_f1 > 0:
+            print(f"Best State0 F1: {best_state0_f1:.4f} (epoch {best_state0_f1_epoch})")
+            print(f"Best State0 Top-1: {best_state0_top1:.4f} (epoch {best_state0_top1_epoch})")
         print(f"📊 Key insight: Top-1 accuracy shows how well argmax(logits) performs")
 
         return model, best_val_f1
@@ -726,6 +762,12 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
         best_epoch = 0
         best_top1_epoch = 0
 
+        # Separate trackers for state0 metrics after switch
+        best_state0_f1 = 0.0
+        best_state0_top1 = 0.0
+        best_state0_f1_epoch = 0
+        best_state0_top1_epoch = 0
+
         mixed_train_loader, state0_val_loader = None, None
         current_dataset = "multi-state"
         switched = False
@@ -734,7 +776,7 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
         print(f"Device: {device}")
         print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
         print("Tracking both threshold-based and top-1 metrics with heterogeneous edges")
-        if config.model_type == "HRM":
+        if config.model.model_type == "HRM":
             print(f"Cycles: {config.model.n_cycles}, Micro-steps: {config.model.t_micro}")
         if config.training.switch_epoch < config.training.epochs:
             print(f"Will switch to mixed dataset (75% state-0, 25% old) at epoch {config.training.switch_epoch}")
@@ -844,16 +886,31 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
                 device=device
             )
 
-            is_best_f1 = val_metrics['f1'] > best_val_f1
-            is_best_top1 = val_metrics['top1_accuracy'] > best_val_top1
+            # After switch, use state0 metrics for best model selection (with separate tracker)
+            if switched and state0_val_metrics is not None:
+                is_best_f1 = state0_val_metrics['f1'] > best_state0_f1
+                is_best_top1 = state0_val_metrics['top1_accuracy'] > best_state0_top1
+                metric_source = "State0"
 
-            if is_best_f1:
-                best_val_f1 = val_metrics['f1']
-                best_epoch = epoch
+                if is_best_f1:
+                    best_state0_f1 = state0_val_metrics['f1']
+                    best_state0_f1_epoch = epoch
 
-            if is_best_top1:
-                best_val_top1 = val_metrics['top1_accuracy']
-                best_top1_epoch = epoch
+                if is_best_top1:
+                    best_state0_top1 = state0_val_metrics['top1_accuracy']
+                    best_state0_top1_epoch = epoch
+            else:
+                is_best_f1 = val_metrics['f1'] > best_val_f1
+                is_best_top1 = val_metrics['top1_accuracy'] > best_val_top1
+                metric_source = "Val"
+
+                if is_best_f1:
+                    best_val_f1 = val_metrics['f1']
+                    best_epoch = epoch
+
+                if is_best_top1:
+                    best_val_top1 = val_metrics['top1_accuracy']
+                    best_top1_epoch = epoch
 
             tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_f1 or is_best_top1)
 
@@ -866,12 +923,17 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
                 base_log += (f" | State0-Val: Acc={state0_val_metrics['accuracy']:.3f} P={state0_val_metrics['precision']:.3f} "
                              f"R={state0_val_metrics['recall']:.3f} F1={state0_val_metrics['f1']:.3f} "
                              f"T1={state0_val_metrics['top1_accuracy']:.3f}")
-            base_log += f" | LR={current_lr:.1e} | {'[F1]' if is_best_f1 else ''}{'[T1]' if is_best_top1 else ''}"
+            best_marker = f"🎯{metric_source}-F1" if is_best_f1 else ""
+            best_marker += f"🎯{metric_source}-T1" if is_best_top1 else ""
+            base_log += f" | LR={current_lr:.1e} | {best_marker}"
             print(base_log)
 
         print(f"\nHETEROGENEOUS Training completed!")
         print(f"Best validation F1: {best_val_f1:.4f} (epoch {best_epoch})")
         print(f"Best validation Top-1 Accuracy: {best_val_top1:.4f} (epoch {best_top1_epoch})")
+        if best_state0_f1 > 0:
+            print(f"Best State0 F1: {best_state0_f1:.4f} (epoch {best_state0_f1_epoch})")
+            print(f"Best State0 Top-1: {best_state0_top1:.4f} (epoch {best_state0_top1_epoch})")
         print(f"📊 Mixed training should improve early-game performance while preserving multi-state knowledge")
 
         return model, best_val_f1

@@ -77,6 +77,7 @@ def load_model_checkpoint(model_name: str, device):
             t_micro=config_dict.get('t_micro', 2),
             use_input_injection=config_dict.get('use_input_injection', True),
             z_init=config_dict.get('z_init', 'zeros'),
+            use_dual_z=config_dict.get('use_dual_z', False),
         )
         is_heterogeneous = True
     else:

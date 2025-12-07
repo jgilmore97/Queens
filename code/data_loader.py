@@ -259,56 +259,87 @@ def get_queens_loaders(
     return train_loader, val_loader
 
 class MixedDataset(Dataset):
-    """Dataset that mixes two datasets with stochastic sampling, ensuring all examples are used before reuse."""
+    """Dataset that mixes two datasets with deterministic interleaved sampling.
 
-    def __init__(self, dataset1, dataset2, ratio1=0.75):
+    Pre-computes a shuffled index list respecting the ratio, ensuring:
+    - Deterministic __getitem__ behavior (idx maps to a fixed sample per epoch)
+    - Full coverage of both datasets over the epoch
+    - Proper ratio between dataset1 and dataset2 samples
+    """
+
+    def __init__(self, dataset1, dataset2, ratio1=0.75, seed=42):
         self.dataset1 = dataset1
         self.dataset2 = dataset2
         self.ratio1 = ratio1
+        self.seed = seed
 
-        self.remaining_pool1 = list(range(len(dataset1)))
-        self.remaining_pool2 = list(range(len(dataset2)))
-        self._shuffle_pools()
+        n1, n2 = len(dataset1), len(dataset2)
 
-        self._len = min(len(dataset1), len(dataset2))
+        # Epoch length based on primary dataset (dataset1)
+        # This ensures we see all of dataset1 each epoch at the given ratio
+        # Dataset2 samples cycle across epochs if it's larger
+        self._len = int(n1 / ratio1) if ratio1 > 0 else n2
+
+        # Build the interleaved index list
+        self._build_index_list()
 
         print(f"MixedDataset created:")
-        print(f"  Dataset1 (state-0): {len(dataset1)} samples ({ratio1:.1%} sampling)")
-        print(f"  Dataset2 (old filtered): {len(dataset2)} samples ({1-ratio1:.1%} sampling)")
+        print(f"  Dataset1 (state-0): {n1} samples ({ratio1:.1%} sampling)")
+        print(f"  Dataset2 (old filtered): {n2} samples ({1-ratio1:.1%} sampling)")
         print(f"  Epoch length: {self._len}")
 
-    def _shuffle_pools(self):
-        """Shuffle both remaining pools."""
-        random.shuffle(self.remaining_pool1)
-        random.shuffle(self.remaining_pool2)
+    def _build_index_list(self):
+        """Build a shuffled list of (dataset_id, internal_idx) tuples."""
+        rng = random.Random(self.seed)
 
-    def _sample_from_pool1(self):
-        """Sample from dataset1, refill pool if exhausted."""
-        if not self.remaining_pool1:
-            self.remaining_pool1 = list(range(len(self.dataset1)))
-            random.shuffle(self.remaining_pool1)
+        n1, n2 = len(self.dataset1), len(self.dataset2)
 
-        idx = self.remaining_pool1.pop()
-        return self.dataset1[idx]
+        # Determine how many samples from each dataset
+        n1_samples = int(self._len * self.ratio1)
+        n2_samples = self._len - n1_samples
 
-    def _sample_from_pool2(self):
-        """Sample from dataset2, refill pool if exhausted."""
-        if not self.remaining_pool2:
-            self.remaining_pool2 = list(range(len(self.dataset2)))
-            random.shuffle(self.remaining_pool2)
+        # Create index lists, cycling if needed
+        indices1 = list(range(n1))
+        indices2 = list(range(n2))
+        rng.shuffle(indices1)
+        rng.shuffle(indices2)
 
-        idx = self.remaining_pool2.pop()
-        return self.dataset2[idx]
+        # Extend by cycling if we need more samples than available
+        while len(indices1) < n1_samples:
+            extra = list(range(n1))
+            rng.shuffle(extra)
+            indices1.extend(extra)
+        while len(indices2) < n2_samples:
+            extra = list(range(n2))
+            rng.shuffle(extra)
+            indices2.extend(extra)
+
+        # Truncate to exact counts
+        indices1 = indices1[:n1_samples]
+        indices2 = indices2[:n2_samples]
+
+        # Build combined list: (0, idx) for dataset1, (1, idx) for dataset2
+        self._index_list = [(0, i) for i in indices1] + [(1, i) for i in indices2]
+        rng.shuffle(self._index_list)
 
     def __getitem__(self, idx):
-        """Stochastically sample from either dataset based on ratio."""
-        if random.random() < self.ratio1:
-            return self._sample_from_pool1()
+        """Deterministically return sample based on pre-computed index list."""
+        dataset_id, internal_idx = self._index_list[idx]
+        if dataset_id == 0:
+            return self.dataset1[internal_idx]
         else:
-            return self._sample_from_pool2()
+            return self.dataset2[internal_idx]
 
     def __len__(self):
         return self._len
+
+    def reshuffle(self, new_seed=None):
+        """Reshuffle the index list for a new epoch (optional, call between epochs)."""
+        if new_seed is not None:
+            self.seed = new_seed
+        else:
+            self.seed += 1
+        self._build_index_list()
 
 def create_filtered_old_dataset(json_path, val_ratio, seed, split="train"):
     """Create dataset from old multi-state data with iteration != 0 filtered out."""
