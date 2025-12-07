@@ -40,6 +40,7 @@ class ModelConfig:
     use_input_injection: bool = True
     z_init: str = "zeros"
     h_pooling_heads: int = 4
+    use_dual_z: bool = False  # Combine per-graph z_local + batch-wide z_meta
 
     input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])
 
@@ -134,7 +135,7 @@ class Config:
 
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "RUN 3 of HRM inspired Model - add attention based h pooling, increase cycles",
+        "experiment_name": "Local Only HRM",
         "tags": ["HRM", "post-train", "attention pooling"],
         "notes": "HRM with attention-based H-module pooling"
     }

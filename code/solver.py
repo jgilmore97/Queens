@@ -21,6 +21,7 @@ class Solver:
     def load_model(self, model_path: str):
         checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
         model_config = checkpoint['config_dict']
+        state_dict = checkpoint['model_state_dict']
 
         is_hrm = model_config.get('model_type') == 'HRM' or 'n_cycles' in model_config
 
@@ -30,6 +31,10 @@ class Solver:
                               not is_hrm)
 
         if is_hrm:
+            # Auto-detect dual z_H from checkpoint keys (fallback if config missing)
+            has_dual_z_weights = 'h_mod.query_meta.weight' in state_dict
+            use_dual_z = model_config.get('use_dual_z', has_dual_z_weights)
+
             model = HRM(
                 input_dim=model_config['input_dim'],
                 hidden_dim=model_config['hidden_dim'],
@@ -41,8 +46,9 @@ class Solver:
                 t_micro=model_config.get('t_micro', 2),
                 use_input_injection=model_config.get('use_input_injection', True),
                 z_init=model_config.get('z_init', 'zeros'),
+                use_dual_z=use_dual_z,
             )
-            print(f"Loaded HRM solver (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)})")
+            print(f"Loaded HRM solver (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)}, dual_z={use_dual_z})")
             is_heterogeneous = True
         elif is_homogeneous_gat:
             model = GAT(
