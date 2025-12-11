@@ -123,7 +123,7 @@ def main_hrm_training():
         n_cycles=hrm_config.model.n_cycles,
         t_micro=hrm_config.model.t_micro,
         use_input_injection=hrm_config.model.use_input_injection,
-        z_init=hrm_config.model.z_init,
+        z_dim=hrm_config.model.z_dim,
     )
 
     total_params = sum(p.numel() for p in model.parameters())
