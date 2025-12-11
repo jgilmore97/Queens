@@ -108,7 +108,7 @@ code
 ├── FullRun.py                   # Experiment orchestrator
 ├── evaluation_analysis.py       # Evaluation pipeline and visualization tools
 ├── evaluation_util.py           # Utility functions for puzzle evaluation
-├── experiment_tracker_fixed.py  # Weights & Biases logging and checkpointing
+├── experiment_tracker.py  # Weights & Biases logging and checkpointing
 ├── solver.py                    # Traditional backtracking solver (reference/validation)
 └── solver.py           # Enhanced solver with cycle detection and memoization
 ```

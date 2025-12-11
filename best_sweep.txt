@@ -1,0 +1,21 @@
+============================================================
+HYPERPARAMETER SWEEP SUMMARY
+============================================================
+Total trials: 50
+  Completed: 50
+  Pruned: 0
+  Failed: 0
+
+Best trial: #33
+  Solve rate: 0.9625
+  Parameters:
+    learning_rate: 0.0019111406616384215
+    weight_decay: 3.710849265052584e-05
+    focal_alpha: 0.29047404880142563
+    focal_gamma: 1.8742041123788569
+    mixed_ratio: 0.5725632133699876
+    hidden_dim: 192
+    gat_heads: 2
+    hgt_heads: 8
+    dropout: 0.18533824581145214
+    z_dim: 128

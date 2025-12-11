@@ -449,14 +449,13 @@ class HRM(nn.Module):
         input_dim: int,
         hidden_dim: int = 128,
         gat_heads: int = 2,
-        hgt_heads: int = 6,
+        hgt_heads: int = 4,
         dropout: float = 0.10,
         use_batch_norm: bool = True,
         n_cycles: int = 2,
         t_micro: int = 2,
         use_input_injection: bool = True,
-        z_init: str = "zeros",
-        h_pooling_heads: int = 4,
+        z_dim: int = 256,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -475,8 +474,8 @@ class HRM(nn.Module):
         print(f"Micro-steps per cycle: {t_micro}")
         print(f"Total L-steps: {n_cycles * t_micro}")
         print(f"GAT heads: {gat_heads}, HGT heads: {hgt_heads}")
-        print(f"H-pooling heads: {h_pooling_heads}")
         print(f"Input injection: {use_input_injection}")
+        print(f"Hidden dim: {hidden_dim}, Global z dim: {z_dim}")
 
         self.embed = _InitialEmbed(input_dim, hidden_dim, dropout)
         self.l_block = _LBlock(
@@ -488,13 +487,15 @@ class HRM(nn.Module):
             edge_types=self.edge_types,
             use_input_injection=use_input_injection,
         )
-        self.h_mod = _HModule(hidden_dim, dropout, num_heads=h_pooling_heads)
+
         self.readout = _Readout(hidden_dim, dropout)
 
-        if z_init == "learned":
-            self.z0 = nn.Parameter(torch.randn(hidden_dim) * 0.02)
-        else:
-            self.register_buffer("z0", torch.zeros(hidden_dim), persistent=False)
+        self.z_per_cycle = nn.ParameterList([
+            nn.Parameter(torch.randn(z_dim) * 0.02)
+            for _ in range(n_cycles)
+        ])
+
+        self.z_proj = nn.Linear(z_dim, hidden_dim)
 
     def forward(self, x_dict, edge_index_dict, return_intermediates=False):
         """
@@ -504,25 +505,13 @@ class HRM(nn.Module):
         x_in = x_dict['cell']
         nodes_embedded = self.embed(x_in)
         nodes = nodes_embedded
-        z = self.z0
 
         if return_intermediates:
             L_states = []
-            H_attention = []
-            z_H_history = [z.detach().cpu()]
-            film_params = []
 
         for cycle_idx in range(self.n_cycles):
+            z = self.z_proj(self.z_per_cycle[cycle_idx])
             for micro_idx in range(self.t_micro):
-                if return_intermediates:
-                    gamma, beta = self.l_block.film.mlp(z).chunk(2, dim=-1)
-                    film_params.append({
-                        'cycle': cycle_idx,
-                        'micro': micro_idx,
-                        'gamma': gamma.detach().cpu(),
-                        'beta': beta.detach().cpu()
-                    })
-
                 nodes = self.l_block(
                     nodes,
                     edge_index_dict,
@@ -533,21 +522,11 @@ class HRM(nn.Module):
                 if return_intermediates:
                     L_states.append(nodes.detach().cpu())
 
-            if return_intermediates:
-                z, attention = self.h_mod(nodes, z, return_attention=True)
-                H_attention.append(attention.detach().cpu())
-                z_H_history.append(z.detach().cpu())
-            else:
-                z = self.h_mod(nodes, z, return_attention=False)
-
         logits = self.readout(nodes, z)
 
         if return_intermediates:
             intermediates = {
-                'L_states': L_states,           # List of tensors (t_micro * n_cycles)
-                'H_attention': H_attention,     # List of tensors (n_cycles)
-                'z_H_history': z_H_history,     # List of tensors (n_cycles + 1)
-                'film_params': film_params,     # List of dicts with gamma, beta
+                'L_states': L_states,
                 'final_logits': logits.detach().cpu(),
                 'board_size': int(x_in.shape[0] ** 0.5)
             }

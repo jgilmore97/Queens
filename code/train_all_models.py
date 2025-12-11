@@ -217,7 +217,6 @@ def train_hrm_model(device):
         n_cycles=config.model.n_cycles,
         t_micro=config.model.t_micro,
         use_input_injection=config.model.use_input_injection,
-        z_init='zeros'
     )
     print(f"✓ Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"✓ HRM Config: {config.model.n_cycles} cycles, {config.model.t_micro} micro-steps")

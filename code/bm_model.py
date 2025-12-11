@@ -16,7 +16,7 @@ class _LayerNorm(nn.Module):
         return x_norm * self.gamma + self.beta
 
 class _InitialEmbed(nn.Module):
-    def __init__(self, input_dim: int, hidden_dim: int, p_drop: float):
+    def __init__(self, input_dim: int = 14, hidden_dim: int = 128, p_drop: float = 0.1):
         super().__init__()
 
         self.proj = nn.Linear(input_dim, hidden_dim)
@@ -28,7 +28,7 @@ class _InitialEmbed(nn.Module):
         return h
     
 class _Encoder(nn.Module):
-    def __init__(self, hidden_dim: int, n_heads: int, p_drop: float):
+    def __init__(self, hidden_dim: int = 128, n_heads: int = 4, p_drop: float = 0.1):
         super().__init__()
 
         assert hidden_dim % n_heads == 0, "hidden_dim must be divisible by n_heads"
@@ -74,7 +74,7 @@ class BenchmarkComparisonModel(nn.Module):
             input_dim:int = 14, 
             hidden_dim:int = 128,
             p_drop:float = 0.1,
-            layers:int = 4):
+            layers:int = 6):
         
         super().__init__()
         

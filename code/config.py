@@ -26,7 +26,7 @@ class ModelConfig:
     input_dim: int = 14
     hidden_dim: int = 128
     layer_count: int = 6
-    dropout: float = 0.2
+    dropout: float = 0.1
 
     gat_heads: int = 2
     hgt_heads: int = 4
@@ -38,8 +38,7 @@ class ModelConfig:
     n_cycles: int = 3
     t_micro: int = 2
     use_input_injection: bool = True
-    z_init: str = "zeros"
-    h_pooling_heads: int = 4
+    z_dim: int = 256
 
     input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])
 
@@ -54,9 +53,9 @@ class TrainingConfig:
 
     switch_epoch: int = 5  # Epoch to switch to state-0 dataset (999 = never)
     state0_json_path: str = "data/State0TrainingSet.json"
-    mixed_ratio: float = 0.75
+    mixed_ratio: float = 0.5  # Ratio of state-0 puzzles in mixed training
 
-    focal_alpha: float = 0.25
+    focal_alpha: float = 0.3
     focal_gamma: float = 2.0
 
     scheduler_type: str = "plateau"
@@ -134,7 +133,7 @@ class Config:
 
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "RUN 3 of HRM inspired Model - add attention based h pooling, increase cycles",
+        "experiment_name": "No H mod, per cycle z with increased dim size",
         "tags": ["HRM", "post-train", "attention pooling"],
         "notes": "HRM with attention-based H-module pooling"
     }

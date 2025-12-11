@@ -723,6 +723,8 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
 
         best_val_f1 = 0.0
         best_val_top1 = 0.0
+        best_state0_val_f1 = 0.0
+        best_state0_val_top1 = 0.0
         best_epoch = 0
         best_top1_epoch = 0
 
@@ -734,7 +736,7 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
         print(f"Device: {device}")
         print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
         print("Tracking both threshold-based and top-1 metrics with heterogeneous edges")
-        if config.model_type == "HRM":
+        if config.model.model_type == "HRM":
             print(f"Cycles: {config.model.n_cycles}, Micro-steps: {config.model.t_micro}")
         if config.training.switch_epoch < config.training.epochs:
             print(f"Will switch to mixed dataset (75% state-0, 25% old) at epoch {config.training.switch_epoch}")
@@ -844,15 +846,25 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
                 device=device
             )
 
-            is_best_f1 = val_metrics['f1'] > best_val_f1
-            is_best_top1 = val_metrics['top1_accuracy'] > best_val_top1
+            if state0_val_metrics is None:
+                is_best_f1 = val_metrics['f1'] > best_val_f1
+                is_best_top1 = val_metrics['top1_accuracy'] > best_val_top1
+            else:
+                is_best_f1 = state0_val_metrics['f1'] > best_state0_val_f1
+                is_best_top1 = state0_val_metrics['top1_accuracy'] > best_state0_val_top1
 
             if is_best_f1:
-                best_val_f1 = val_metrics['f1']
+                if state0_val_metrics is not None:
+                    best_state0_val_f1 = state0_val_metrics['f1']
+                else:
+                    best_val_f1 = val_metrics['f1']
                 best_epoch = epoch
 
             if is_best_top1:
-                best_val_top1 = val_metrics['top1_accuracy']
+                if state0_val_metrics is not None:
+                    best_state0_val_top1 = state0_val_metrics['top1_accuracy']
+                else:
+                    best_val_top1 = val_metrics['top1_accuracy']
                 best_top1_epoch = epoch
 
             tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_f1 or is_best_top1)
