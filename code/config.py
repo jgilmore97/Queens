@@ -42,6 +42,13 @@ class ModelConfig:
 
     input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])
 
+class BenchmarkConfig:
+    """Benchmark model configuration."""
+    input_dim: int = 14
+    hidden_dim: int = 128
+    layers: int = 6
+    dropout: float = 0.1
+
 @dataclass
 class TrainingConfig:
     """Training hyperparameters."""
@@ -100,6 +107,7 @@ class Config:
 
     def __init__(self, **kwargs):
         self.model = ModelConfig()
+        self.benchmark = BenchmarkConfig()
         self.training = TrainingConfig()
         self.data = DataConfig()
         self.experiment = ExperimentConfig()
@@ -125,6 +133,7 @@ class Config:
         """Convert configuration to dictionary."""
         return {
             "model": self.model.__dict__,
+            "benchmark": self.benchmark.__dict__,
             "training": self.training.__dict__,
             "data": self.data.__dict__,
             "experiment": self.experiment.__dict__,

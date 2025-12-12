@@ -2,10 +2,12 @@ import os
 import torch
 from pathlib import Path
 
-from train import run_training_with_tracking_hetero
+from train import run_training_with_tracking_hetero, run_training_with_tracking
 from model import GAT, HeteroGAT, HRM
-from data_loader import get_queens_loaders
-from config import Config, BASELINE_CONFIG
+from data_loader import get_queens_loaders, get_benchmark_loaders
+from config import Config, BASELINE_CONFIG, BenchmarkConfig
+from bm_model import BenchmarkComparisonModel
+from bm_train import benchmark_training
 
 import random
 import numpy as np
@@ -151,6 +153,51 @@ def main_hrm_training():
         print(f"\nTraining failed with error: {e}")
         raise
 
+def main_benchmark_training():
+    """Train benchmark comparison model."""
+    set_seed(42)
+    bm_config = Config(**BASELINE_CONFIG)
+
+    train_loader, val_loader = get_benchmark_loaders(
+        bm_config.data.train_json,
+        batch_size=bm_config.training.batch_size,
+        val_ratio=bm_config.training.val_ratio,
+        seed=bm_config.data.seed,
+        num_workers=bm_config.data.num_workers,
+        pin_memory=bm_config.data.pin_memory,
+        shuffle_train=bm_config.data.shuffle_train,
+    )
+    model = BenchmarkComparisonModel(
+        input_dim=bm_config.benchmark.input_dim,
+        hidden_dim=bm_config.benchmark.hidden_dim,
+        layers=bm_config.benchmark.layers,
+        p_drop=bm_config.benchmark.dropout
+    )
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+
+    print(f"\nStarting Benchmark training for {bm_config.training.epochs} epochs...")
+    try:
+        model, best_f1 = benchmark_training(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            config=bm_config
+        )
+
+        print(f"\nBenchmark training completed! Best validation F1: {best_f1:.4f}")
+        return model, best_f1
+
+    except KeyboardInterrupt:
+        print("\nTraining interrupted by user")
+        return None, 0.0
+    except Exception as e:
+        print(f"\nTraining failed with error: {e}")
+        raise
+
+
 def run_hrm_baseline():
     """Run the HRM baseline experiment."""
     return main_hrm_training()
@@ -158,3 +205,7 @@ def run_hrm_baseline():
 def run_heterogeneous_baseline():
     """Run the heterogeneous baseline experiment."""
     return main_heterogeneous_training()
+
+def run_benchmark_training():
+    """Run the benchmark training experiment."""
+    return main_benchmark_training()

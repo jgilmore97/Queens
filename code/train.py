@@ -6,7 +6,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR, ReduceLROnPlatea
 from tqdm.auto import tqdm
 import numpy as np
 
-from experiment_tracker_fixed import ExperimentTracker
+from experiment_tracker import ExperimentTracker
 from data_loader import (
     QueensDataset,
     HomogeneousQueensDataset,
