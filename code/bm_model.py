@@ -58,7 +58,7 @@ class _Encoder(nn.Module):
         attn = torch.softmax(attn, dim=-1)  # (B, n_heads, C, C)
         attn = self.attn_drop(attn)
         h_attn = torch.einsum('bhij,bhjd->bhid', attn, v)  # (B, n_heads, C, D_head)
-        h_attn = h_attn.transpose(1,2).view(B, C, D)  # (B, C, D)
+        h_attn = h_attn.transpose(1,2).reshape(B, C, D)  # (B, C, D)
         h_attn = self.linear_out(h_attn)
         
         h_attn = self.layer_norm1(h_attn + x)
@@ -88,12 +88,12 @@ class BenchmarkComparisonModel(nn.Module):
             _Encoder(self.hidden_dim, n_heads=4, p_drop=self.p_drop)
             for _ in range(layers)
         ])
-        self.classifier = nn.Linear(self.hidden_dim, 2)
+        self.classifier = nn.Linear(self.hidden_dim, 1)
 
     def forward(self, x):
         h = self.embedding(x)
         for layer in self.layers:
-            h = layer(h)
+            h = h + layer(h) 
         out = self.classifier(h)
         return out
 

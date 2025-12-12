@@ -521,13 +521,13 @@ class BenchmarkDataset(vanillaDataset):
         #padding region to max size
         region_padded = self.pad(region, target_size=11, pad_with=-1)
         partial_padded = self.pad(partial, target_size=11, pad_with=0)
-        label_padded = self.pad(label, target_size=11, pad_with=-100)
+        label_padded = self.pad(label, target_size=11, pad_with=-1)
 
         coords = np.indices((self.max_regions, self.max_regions)).reshape(2, -1).T.astype(np.float32) / (self.max_regions - 1)  # (N², 2)
         reg_onehot = np.zeros((self.max_regions * self.max_regions, self.max_regions), dtype=np.float32)
         flat_ids   = region_padded.flatten()
         valid_mask = flat_ids != -1
-        reg_onehot[np.arange(self.max_regions * self.max_regions)[valid_mask], flat_ids[valid_mask]] = 1.0                                  # (N², R)
+        reg_onehot[np.arange(self.max_regions * self.max_regions)[valid_mask], flat_ids[valid_mask]] = 1.0 # (N², R)
 
         has_q = partial_padded.flatten()[:, None].astype(np.float32) # (N², 1)
         
