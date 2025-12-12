@@ -37,14 +37,11 @@ def train_epoch(
     correct, TP, FP, FN, TN = 0, 0, 0, 0, 0
 
     total_top1_correct = 0
-    total_top1_tp = 0
     total_top1_predictions = 0
-    total_top1_positive_labels = 0
 
     pbar = tqdm(data_loader, desc=f"Epoch {epoch} Training", leave=False)
     for batch_idx, batch in enumerate(pbar):
         x = batch['x'].to(device)
-        B = x.size(0)
         y = batch['y'].to(device)
         optimizer.zero_grad()
         logits = model(x)
@@ -68,11 +65,9 @@ def train_epoch(
         total_nodes += y.size(0)
 
         # Top-1 metrics
-        top1_correct, top1_tp, top1_predictions, top1_positive_labels = calculate_top1_metrics(logits, y)
+        top1_correct, top1_predictions,  = calculate_top1_metrics(logits, y)
         total_top1_correct += top1_correct
-        total_top1_tp += top1_tp
         total_top1_predictions += top1_predictions
-        total_top1_positive_labels += top1_positive_labels  
 
         pbar.set_postfix({
             'Loss': f"{total_loss / total_nodes:.4f}",
@@ -88,7 +83,6 @@ def train_epoch(
     recall = TP / (TP + FN + eps)
     f1 = 2 * (precision * recall) / (precision + recall + eps)
     top1_accuracy = total_top1_correct / total_top1_predictions
-    top1_recall = total_top1_tp / (total_top1_positive_labels + eps)
 
     metrics = {
         'loss': avg_loss,
@@ -96,8 +90,7 @@ def train_epoch(
         'precision': precision,
         'recall': recall,
         'f1': f1,
-        'top1_accuracy': top1_accuracy,
-        'top1_recall': top1_recall
+        'top1_accuracy': top1_accuracy
     }
 
     return metrics
@@ -117,9 +110,7 @@ def evaluate_epoch(
     correct, TP, FP, FN, TN = 0, 0, 0, 0, 0
 
     total_top1_correct = 0
-    total_top1_tp = 0
     total_top1_predictions = 0
-    total_top1_positive_labels = 0
 
     pbar = tqdm(data_loader, desc=f"Epoch {epoch} Evaluation", leave=False)
     for batch_idx, batch in enumerate(pbar):
@@ -144,11 +135,9 @@ def evaluate_epoch(
         total_nodes += y.size(0)
 
         # Top-1 metrics
-        top1_correct, top1_tp, top1_predictions, top1_positive_labels = calculate_top1_metrics(logits, y)
+        top1_correct, top1_predictions = calculate_top1_metrics(logits, y)
         total_top1_correct += top1_correct
-        total_top1_tp += top1_tp
         total_top1_predictions += top1_predictions
-        total_top1_positive_labels += top1_positive_labels  
 
         pbar.set_postfix({
             'Loss': f"{total_loss / total_nodes:.4f}",
@@ -164,7 +153,6 @@ def evaluate_epoch(
     recall = TP / (TP + FN + eps)
     f1 = 2 * (precision * recall) / (precision + recall + eps)
     top1_accuracy = total_top1_correct / total_top1_predictions
-    top1_recall = total_top1_tp / (total_top1_positive_labels + eps)
 
     metrics = {
         'loss': avg_loss,
@@ -173,7 +161,6 @@ def evaluate_epoch(
         'recall': recall,
         'f1': f1,
         'top1_accuracy': top1_accuracy,
-        'top1_recall': top1_recall
     }
 
     return metrics
@@ -223,11 +210,11 @@ def benchmark_training(
                 epoch
             )
 
-            tracker.log_metrics(train_metrics, val_metrics, epoch)
+            tracker.log_epoch_metrics(train_metrics, val_metrics, epoch)
 
             if val_metrics['f1'] > best_f1:
                 best_f1 = val_metrics['f1']
-                tracker.save_best_model(model, epoch, best_f1)
+                tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best=True)
             if val_metrics['top1_accuracy'] > best_top1_acc:
                 best_top1_acc = val_metrics['top1_accuracy']
                 best_top1_epoch = epoch
