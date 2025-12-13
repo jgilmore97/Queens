@@ -142,9 +142,9 @@ class Config:
 
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "No H mod, per cycle z with increased dim size",
-        "tags": ["HRM", "post-train", "attention pooling"],
-        "notes": "HRM with attention-based H-module pooling"
+        "experiment_name": "Benchmark transformer model run",
+        "tags": ["benchmark", "transformer"],
+        "notes": "Benchmarking non-graph transformer model against HRM models"
     }
 }
 
