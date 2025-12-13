@@ -1,8 +1,3 @@
-"""
-Vectorized full-puzzle evaluation for benchmark transformer model.
-Runs batched autoregressive solve across multiple puzzles simultaneously.
-"""
-
 import torch
 import numpy as np
 from typing import Dict, Tuple
@@ -11,7 +6,6 @@ from data_loader import BenchmarkDataset
 
 
 class BenchmarkStep0Dataset(BenchmarkDataset):
-    """Dataset filtered to only step-0 (empty board) puzzles for evaluation."""
 
     def __init__(self, json_path: str, val_ratio: float = 0.1, seed: int = 42):
         super().__init__(
@@ -22,13 +16,8 @@ class BenchmarkStep0Dataset(BenchmarkDataset):
         )
         # Filter to step-0 only
         self.records = [r for r in self.records if r.get('step', 0) == 0]
-        print(f"BenchmarkStep0Dataset: {len(self.records)} step-0 puzzles")
 
     def build_features_with_queens(self, idx: int, queen_board: np.ndarray) -> torch.Tensor:
-        """
-        Build features for a puzzle with a custom queen board state.
-        Reuses the feature encoding logic from BenchmarkDataset.
-        """
         e = self.records[idx]
         region = np.asarray(e["region"], dtype=np.int64)
 
@@ -60,10 +49,6 @@ def evaluate_solve_rate(
     val_ratio: float = 0.1,
     seed: int = 42,
 ) -> Dict[str, float]:
-    """
-    Evaluate model's full-puzzle solve rate using batched autoregressive inference.
-    All puzzles are padded to same size so no grouping needed.
-    """
     model.eval()
 
     dataset = BenchmarkStep0Dataset(json_path, val_ratio=val_ratio, seed=seed)
@@ -105,12 +90,8 @@ def _evaluate_batch(
     device: str,
     max_size: int = 11
 ) -> Tuple[int, int, Dict[int, int]]:
-    """
-    Evaluate a single batch of puzzles autoregressively.
-    """
     num_puzzles = len(batch_indices)
 
-    # Get board sizes and initialize queen boards
     board_sizes = []
     queen_boards = []
     for idx in batch_indices:
@@ -120,7 +101,6 @@ def _evaluate_batch(
 
     max_steps = max(board_sizes)
 
-    # Extract label boards and create valid masks
     labels_flat = []
     for idx in batch_indices:
         record = dataset.records[idx]
@@ -131,47 +111,36 @@ def _evaluate_batch(
 
     valid_mask_tensor = (labels_flat >= 0)
 
-    # Track solve status
     still_correct = torch.ones(num_puzzles, dtype=torch.bool, device=device)
     first_error_step = torch.full((num_puzzles,), -1, dtype=torch.long, device=device)
     placed = torch.zeros((num_puzzles, max_size * max_size), dtype=torch.bool, device=device)
 
-    # Track which puzzles are done (reached their n steps)
     steps_remaining = torch.tensor(board_sizes, device=device)
 
     for step in range(max_steps):
-        # Skip puzzles that have completed all their steps
         active = steps_remaining > step
 
-        # Build features
         x_list = [dataset.build_features_with_queens(idx, queen_boards[i])
                   for i, idx in enumerate(batch_indices)]
         x = torch.stack(x_list).to(device)
 
-        # Forward pass
         logits = model(x).squeeze(-1)
 
-        # Mask out already placed and invalid positions
         masked_logits = logits.clone()
         masked_logits[placed] = float('-inf')
         masked_logits[~valid_mask_tensor] = float('-inf')
 
-        # Select best position for each puzzle
         selected_indices = masked_logits.argmax(dim=1)
 
-        # Check correctness only for active puzzles
         selected_labels = labels_flat[torch.arange(num_puzzles, device=device), selected_indices]
         is_correct = (selected_labels == 1) | ~active
 
-        # Track first error
         just_failed = still_correct & ~is_correct & active
         first_error_step[just_failed] = step
         still_correct = still_correct & is_correct
 
-        # Update placed mask
         placed[torch.arange(num_puzzles, device=device), selected_indices] = True
 
-        # Update queen_boards for next iteration
         selected_rows = (selected_indices // max_size).cpu().numpy()
         selected_cols = (selected_indices % max_size).cpu().numpy()
         for i in range(num_puzzles):
@@ -206,32 +175,3 @@ def print_results(results: Dict) -> None:
             count = results['error_by_step'][step]
             pct = count / failed if failed > 0 else 0
             print(f"  Step {step}: {count} errors ({pct:.1%} of failures)")
-
-
-if __name__ == "__main__":
-    import argparse
-    from bm_model import BenchmarkComparisonModel
-
-    parser = argparse.ArgumentParser(description="Evaluate benchmark model on Queens puzzles")
-    parser.add_argument("--checkpoint", type=str, required=True, help="Path to model checkpoint")
-    parser.add_argument("--data", type=str, required=True, help="Path to JSON dataset")
-    parser.add_argument("--batch-size", type=int, default=128, help="Batch size for evaluation")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-
-    args = parser.parse_args()
-
-    # Load model
-    checkpoint = torch.load(args.checkpoint, map_location=args.device)
-    model = BenchmarkComparisonModel()
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model = model.to(args.device)
-
-    # Evaluate
-    results = evaluate_solve_rate(
-        model,
-        args.data,
-        args.device,
-        batch_size=args.batch_size
-    )
-
-    print_results(results)
