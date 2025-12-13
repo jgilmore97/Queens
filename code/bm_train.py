@@ -13,13 +13,18 @@ def calculate_top1_metrics(
     labels: torch.Tensor,
     k: int = 1
 ) -> tuple[int, int]:
+    """Calculate top-k accuracy, only considering valid (non-padded) positions."""
     batch_size = logits.size(0)
-    _, topk_indices = torch.topk(logits, k=k, dim=-1)  # [batch, k]
-    
+
+    # Mask out padded positions by setting their logits to -inf
+    valid_mask = labels >= 0  # [batch, seq_len]
+    masked_logits = logits.clone()
+    masked_logits[~valid_mask] = float('-inf')
+
+    _, topk_indices = torch.topk(masked_logits, k=k, dim=-1)  # [batch, k]
     topk_labels = torch.gather(labels, dim=1, index=topk_indices)  # [batch, k]
-    
     topk_correct = (topk_labels == 1).any(dim=1).sum().item()
-    
+
     return topk_correct, batch_size
 
 def train_epoch(
@@ -46,23 +51,32 @@ def train_epoch(
         optimizer.zero_grad()
         logits = model(x)
         logits = logits.squeeze(-1)
-        loss = criterion(logits, y.float())
+
+        # Create valid mask (exclude padded positions with y=-1)
+        valid_mask = y >= 0
+        valid_logits = logits[valid_mask]
+        valid_y = y[valid_mask]
+
+        # Compute loss only on valid positions
+        loss = criterion(valid_logits, valid_y.float())
         loss.backward()
         optimizer.step()
 
-        preds = (logits > 0).long()
-        batch_correct = (preds == y).sum().item()
-        batch_TP = ((preds == 1) & (y == 1)).sum().item()
-        batch_FP = ((preds == 1) & (y == 0)).sum().item()
-        batch_FN = ((preds == 0) & (y == 1)).sum().item()
-        batch_TN = ((preds == 0) & (y == 0)).sum().item()
+        # Compute metrics only on valid positions
+        preds = (valid_logits > 0).long()
+        batch_correct = (preds == valid_y).sum().item()
+        batch_TP = ((preds == 1) & (valid_y == 1)).sum().item()
+        batch_FP = ((preds == 1) & (valid_y == 0)).sum().item()
+        batch_FN = ((preds == 0) & (valid_y == 1)).sum().item()
+        batch_TN = ((preds == 0) & (valid_y == 0)).sum().item()
         correct += batch_correct
         TP += batch_TP
         FP += batch_FP
         FN += batch_FN
         TN += batch_TN
-        total_loss += loss.item() * y.size(0)
-        total_nodes += y.size(0)
+        num_valid = valid_mask.sum().item()
+        total_loss += loss.item() * num_valid
+        total_nodes += num_valid
 
         # Top-1 metrics
         top1_correct, top1_predictions,  = calculate_top1_metrics(logits, y)
@@ -118,21 +132,30 @@ def evaluate_epoch(
         y = batch['y'].to(device)
         logits = model(x)
         logits = logits.squeeze(-1)
-        loss = criterion(logits, y.float())
 
-        preds = (logits > 0).long()
-        batch_correct = (preds == y).sum().item()
-        batch_TP = ((preds == 1) & (y == 1)).sum().item()
-        batch_FP = ((preds == 1) & (y == 0)).sum().item()
-        batch_FN = ((preds == 0) & (y == 1)).sum().item()
-        batch_TN = ((preds == 0) & (y == 0)).sum().item()
+        # Create valid mask (exclude padded positions with y=-1)
+        valid_mask = y >= 0
+        valid_logits = logits[valid_mask]
+        valid_y = y[valid_mask]
+
+        # Compute loss only on valid positions
+        loss = criterion(valid_logits, valid_y.float())
+
+        # Compute metrics only on valid positions
+        preds = (valid_logits > 0).long()
+        batch_correct = (preds == valid_y).sum().item()
+        batch_TP = ((preds == 1) & (valid_y == 1)).sum().item()
+        batch_FP = ((preds == 1) & (valid_y == 0)).sum().item()
+        batch_FN = ((preds == 0) & (valid_y == 1)).sum().item()
+        batch_TN = ((preds == 0) & (valid_y == 0)).sum().item()
         correct += batch_correct
         TP += batch_TP
         FP += batch_FP
         FN += batch_FN
         TN += batch_TN
-        total_loss += loss.item() * y.size(0)
-        total_nodes += y.size(0)
+        num_valid = valid_mask.sum().item()
+        total_loss += loss.item() * num_valid
+        total_nodes += num_valid
 
         # Top-1 metrics
         top1_correct, top1_predictions = calculate_top1_metrics(logits, y)
