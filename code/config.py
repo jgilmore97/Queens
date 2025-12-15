@@ -52,15 +52,19 @@ class BenchmarkConfig:
 @dataclass
 class TrainingConfig:
     """Training hyperparameters."""
-    epochs: int = 18
+    epochs: int = 10
     batch_size: int = 512
     learning_rate: float = 1e-3
     weight_decay: float = 1e-5
     val_ratio: float = 0.10
 
-    switch_epoch: int = 5  # Epoch to switch to state-0 dataset (999 = never)
+    # switch_epoch: int = 10  # Epoch to switch to state-0 dataset (999 = never)
+    state0_epochs: list = field(default_factory=lambda: [])
+    lr_reduce_epoch: int = field(default_factory=lambda: [7])  # Epoch to reduce LR (set > epochs to disable)
+    lr_reduce_factor: float = 0.5
     state0_json_path: str = "data/State0TrainingSet.json"
-    mixed_ratio: float = 0.5  # Ratio of state-0 puzzles in mixed training
+    mixed_ratio: float = 0.75  # Ratio of state-0 puzzles in mixed training
+
 
     focal_alpha: float = 0.3
     focal_gamma: float = 2.0
@@ -73,7 +77,7 @@ class TrainingConfig:
 class DataConfig:
     """Data loading configuration."""
     train_json: str = "data/StateTrainingSet.json"
-    test_json: str = "StateValSet.json"
+    auto_reg_json: str = "data/StateValSet.json"
     num_workers: int = 0 if _detect_notebook_environment() else 4
     pin_memory: bool = True
     shuffle_train: bool = True
@@ -142,9 +146,9 @@ class Config:
 
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "Benchmark transformer model run",
-        "tags": ["benchmark", "transformer"],
-        "notes": "Benchmarking non-graph transformer model against HRM models"
+        "experiment_name": "HRM original dataset only",
+        "tags": ["HRM"],
+        "notes": "Using only original dataset without state-0 augmentation"
     }
 }
 

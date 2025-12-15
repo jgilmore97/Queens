@@ -1,14 +1,10 @@
-"""
-Vectorized full-puzzle evaluation for hyperparameter sweep.
-Runs batched autoregressive solve across multiple puzzles simultaneously.
-"""
-
 import torch
 import numpy as np
 from typing import Dict, Tuple, Optional
 from torch_geometric.loader import DataLoader
 from pathlib import Path
 import json
+from torch_geometric.data import Batch
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -22,7 +18,7 @@ class Step0Dataset(QueensDataset):
     def __init__(self, json_path: str, val_ratio: float = 0.1, seed: int = 42):
         super().__init__(
             json_path,
-            split="all",  # Use all 720 puzzles, not just val split
+            split="all",
             val_ratio=val_ratio,
             seed=seed
         )
@@ -45,7 +41,6 @@ def evaluate_solve_rate(
     """
     model.eval()
 
-    # Load step-0 puzzles
     dataset = Step0Dataset(val_json_path, val_ratio=val_ratio, seed=seed)
     
     # Group puzzles by size
@@ -75,7 +70,6 @@ def evaluate_solve_rate(
                 
                 # Build batch manually
                 batch_data = [dataset.get(indices[batch_start + i]) for i in range(len(batch_records))]
-                from torch_geometric.data import Batch
                 batch = Batch.from_data_list(batch_data)
                 batch = batch.to(device)
                 
@@ -101,18 +95,16 @@ def _evaluate_batch(
     model: torch.nn.Module,
     batch,
     device: str,
-    n: int  # Now passed explicitly - all puzzles in batch have this size
+    n: int 
 ) -> Tuple[int, int, Dict[int, int]]:
     """
     Evaluate a single batch of puzzles autoregressively.
     All puzzles in batch must have the same size n.
     """
-    # Extract batch info
     x = batch['cell'].x.clone()
     y = batch['cell'].y
     batch_indices = batch['cell'].batch
 
-    # Build edge index dict for model
     edge_index_dict = {
         ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
         ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
@@ -125,7 +117,6 @@ def _evaluate_batch(
     first_error_step = torch.full((num_graphs,), -1, dtype=torch.long, device=device)
     placed = torch.zeros_like(y, dtype=torch.bool)
 
-    # Use the passed n (correct for all puzzles in this batch)
     for step in range(n):
         x_dict = {'cell': x}
         logits = model(x_dict, edge_index_dict)
@@ -163,10 +154,6 @@ def _batched_argmax(
 ) -> torch.Tensor:
     """
     Compute argmax of logits within each graph.
-    Args:
-        logits: [total_nodes] tensor of logits
-        batch_indices: [total_nodes] tensor of graph indices
-        num_graphs: Number of graphs in batch
     Returns:
         [num_graphs] tensor of selected node indices (global indices into logits)
     """
@@ -185,10 +172,8 @@ def _batched_argmax(
         mask = (batch_indices == g)
         position_in_graph[mask] = torch.arange(mask.sum(), device=device)
 
-    # Fill matrix
     logits_matrix[batch_indices, position_in_graph] = logits
 
-    # Argmax within each graph (local index)
     local_argmax = logits_matrix.argmax(dim=1)  # [num_graphs]
 
     # Convert local index back to global node index
