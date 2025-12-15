@@ -52,25 +52,28 @@ class BenchmarkConfig:
 @dataclass
 class TrainingConfig:
     """Training hyperparameters."""
-    epochs: int = 10
+    epochs: int = 18
     batch_size: int = 512
     learning_rate: float = 1e-3
     weight_decay: float = 1e-5
     val_ratio: float = 0.10
 
-    # switch_epoch: int = 10  # Epoch to switch to state-0 dataset (999 = never)
-    state0_epochs: list = field(default_factory=lambda: [])
-    lr_reduce_epoch: int = field(default_factory=lambda: [7])  # Epoch to reduce LR (set > epochs to disable)
-    lr_reduce_factor: float = 0.5
+    # Dataset combination
+    combine_state0: bool = True  # Combine state-0 into training set upfront
     state0_json_path: str = "data/State0TrainingSet.json"
-    mixed_ratio: float = 0.75  # Ratio of state-0 puzzles in mixed training
-
+    
+    # Legacy curriculum options (unused when combine_state0=True)
+    state0_epochs: list = field(default_factory=lambda: [])
+    lr_reduce_epoch: list = field(default_factory=lambda: [])
+    lr_reduce_factor: float = 0.5
+    mixed_ratio: float = 0.75
 
     focal_alpha: float = 0.3
     focal_gamma: float = 2.0
 
-    scheduler_type: str = "plateau"
-    cosine_t_max: int = 100
+    # Scheduler
+    scheduler_type: str = "cosine"  # "cosine", "plateau", "step", "none"
+    cosine_t_max: int = 18  # Should match epochs
     cosine_eta_min: float = 1e-6
 
 @dataclass
@@ -146,9 +149,9 @@ class Config:
 
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "HRM original dataset only",
-        "tags": ["HRM"],
-        "notes": "Using only original dataset without state-0 augmentation"
+        "experiment_name": "HRM combine datasets for full run, use cosine annealing. 18 epochs",
+        "tags": ["HRM", "cosine_annealing", "combined_data"],
+        "notes": "Combining state-0 data into training set upfront and using cosine annealing scheduler."
     }
 }
 

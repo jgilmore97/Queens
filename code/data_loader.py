@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from torch_geometric.data import Data, HeteroData, Dataset
 from torch_geometric.loader import DataLoader
-from torch.utils.data import Dataset as vanillaDataset, DataLoader as vanillaDataLoader
+from torch.utils.data import Dataset as vanillaDataset, DataLoader as vanillaDataLoader, ConcatDataset
 
 
 # Edge index cache: maps region hash -> edge index dict
@@ -255,6 +255,70 @@ def get_queens_loaders(
 
     train_loader = DataLoader(ds_train, shuffle=shuffle_train, **kwargs)
     val_loader   = DataLoader(ds_val,   shuffle=False,        **kwargs)
+
+    return train_loader, val_loader
+
+def get_combined_queens_loaders(
+    multistate_json: str,
+    state0_json: str,
+    *,
+    batch_size: int = 512,
+    val_ratio: float = 0.10,
+    seed: int = 42,
+    num_workers: int = 0,
+    pin_memory: bool = True,
+    follow_batch: list[str] | None = None,
+    shuffle_train: bool = True,
+):
+    """Return (train_loader, val_loader) with multi-state + state-0 combined upfront."""
+    
+    # Multi-state datasets
+    ds_multistate_train = QueensDataset(
+        multistate_json,
+        split="train",
+        val_ratio=val_ratio,
+        seed=seed,
+    )
+    ds_multistate_val = QueensDataset(
+        multistate_json,
+        split="val",
+        val_ratio=val_ratio,
+        seed=seed,
+    )
+    
+    # State-0 datasets
+    ds_state0_train = QueensDataset(
+        state0_json,
+        split="train",
+        val_ratio=val_ratio,
+        seed=seed,
+    )
+    ds_state0_val = QueensDataset(
+        state0_json,
+        split="val",
+        val_ratio=val_ratio,
+        seed=seed,
+    )
+    
+    # Combine train sets
+    combined_train = ConcatDataset([ds_multistate_train, ds_state0_train])
+    combined_val = ConcatDataset([ds_multistate_val, ds_state0_val])
+    
+    print(f"Combined dataset created:")
+    print(f"  Multi-state train: {len(ds_multistate_train):,}")
+    print(f"  State-0 train: {len(ds_state0_train):,}")
+    print(f"  Total train: {len(combined_train):,}")
+    print(f"  Total val: {len(combined_val):,}")
+    
+    kwargs = dict(
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        follow_batch=follow_batch or [],
+    )
+
+    train_loader = DataLoader(combined_train, shuffle=shuffle_train, **kwargs)
+    val_loader = DataLoader(combined_val, shuffle=False, **kwargs)
 
     return train_loader, val_loader
 

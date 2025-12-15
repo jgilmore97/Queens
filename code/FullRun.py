@@ -4,7 +4,7 @@ from pathlib import Path
 
 from train import run_training_with_tracking_hetero, run_training_with_tracking
 from model import GAT, HeteroGAT, HRM
-from data_loader import get_queens_loaders, get_benchmark_loaders
+from data_loader import get_queens_loaders, get_benchmark_loaders, get_combined_queens_loaders
 from config import Config, BASELINE_CONFIG, BenchmarkConfig
 from bm_model import BenchmarkComparisonModel
 from bm_train import benchmark_training
@@ -101,15 +101,28 @@ def main_hrm_training():
     print("Using Hierarchical Reasoning Model (HRM)")
 
     print("\nLoading datasets...")
-    train_loader, val_loader = get_queens_loaders(
-        hrm_config.data.train_json,
-        batch_size=hrm_config.training.batch_size,
-        val_ratio=hrm_config.training.val_ratio,
-        seed=hrm_config.data.seed,
-        num_workers=hrm_config.data.num_workers,
-        pin_memory=hrm_config.data.pin_memory,
-        shuffle_train=hrm_config.data.shuffle_train,
-    )
+    
+    if hrm_config.training.combine_state0:
+        train_loader, val_loader = get_combined_queens_loaders(
+            hrm_config.data.train_json,
+            hrm_config.training.state0_json_path,
+            batch_size=hrm_config.training.batch_size,
+            val_ratio=hrm_config.training.val_ratio,
+            seed=hrm_config.data.seed,
+            num_workers=hrm_config.data.num_workers,
+            pin_memory=hrm_config.data.pin_memory,
+            shuffle_train=hrm_config.data.shuffle_train,
+        )
+    else:
+        train_loader, val_loader = get_queens_loaders(
+            hrm_config.data.train_json,
+            batch_size=hrm_config.training.batch_size,
+            val_ratio=hrm_config.training.val_ratio,
+            seed=hrm_config.data.seed,
+            num_workers=hrm_config.data.num_workers,
+            pin_memory=hrm_config.data.pin_memory,
+            shuffle_train=hrm_config.data.shuffle_train,
+        )
 
     print(f"Train samples: {len(train_loader.dataset):,}")
     print(f"Val samples: {len(val_loader.dataset):,}")

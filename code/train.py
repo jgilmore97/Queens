@@ -12,7 +12,8 @@ from data_loader import (
     HomogeneousQueensDataset,
     MixedDataset,
     create_filtered_old_dataset,
-    create_filtered_old_dataset_homogeneous
+    create_filtered_old_dataset_homogeneous,
+    get_combined_queens_loaders,
 )
 from config import Config
 from model import GAT, HeteroGAT, HRM
@@ -704,7 +705,7 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
         tracker.finish()
 
 def run_training_with_tracking_hetero(model, train_loader, val_loader, config, resume_id=None):
-    """Main training loop with curriculum-based state-0 interleaving."""
+    """Main training loop for heterogeneous models."""
 
     tracker = ExperimentTracker(config, resume_id=resume_id)
 
@@ -731,91 +732,16 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
         best_epoch = 0
         best_top1_epoch = 0
 
-        # Prepare state-0 mixed loader (created once, reused)
-        mixed_train_loader = None
-        state0_val_loader = None
-
-        state0_epochs = set(config.training.state0_epochs)
-        lr_reduce_epoch = config.training.lr_reduce_epoch
-        lr_reduced = False
-
         print(f"Starting HETEROGENEOUS training for {config.training.epochs} epochs")
         print(f"Device: {device}")
         print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-        print(f"State-0 curriculum epochs: {sorted(state0_epochs)}")
-        print(f"LR reduction at epoch: {lr_reduce_epoch}")
+        print(f"Scheduler: {config.training.scheduler_type}")
+        if config.training.scheduler_type == "cosine":
+            print(f"  T_max: {config.training.cosine_t_max}, eta_min: {config.training.cosine_eta_min:.1e}")
+        print(f"Train samples: {len(train_loader.dataset):,}")
+        print(f"Val samples: {len(val_loader.dataset):,}")
 
         for epoch in range(1, config.training.epochs + 1):
-            # Determine if this is a state-0 epoch
-            use_state0 = epoch in state0_epochs
-
-            # Create mixed loader on first state-0 epoch (lazy init)
-            if use_state0 and mixed_train_loader is None:
-                print(f"\nInitializing state-0 mixed dataset...")
-                print(f"Loading from {config.training.state0_json_path}")
-
-                state0_train_dataset = QueensDataset(
-                    config.training.state0_json_path,
-                    split="train",
-                    val_ratio=config.training.val_ratio,
-                    seed=config.data.seed
-                )
-                state0_val_dataset = QueensDataset(
-                    config.training.state0_json_path,
-                    split="val",
-                    val_ratio=config.training.val_ratio,
-                    seed=config.data.seed
-                )
-
-                filtered_old_train_dataset = create_filtered_old_dataset(
-                    config.data.train_json,
-                    val_ratio=config.training.val_ratio,
-                    seed=config.data.seed,
-                    split="train"
-                )
-
-                mixed_dataset = MixedDataset(
-                    state0_train_dataset,
-                    filtered_old_train_dataset,
-                    config.training.mixed_ratio
-                )
-
-                mixed_train_loader = DataLoader(
-                    mixed_dataset,
-                    batch_size=config.training.batch_size // 2,
-                    num_workers=config.data.num_workers,
-                    pin_memory=config.data.pin_memory,
-                    shuffle=True,
-                    follow_batch=[]
-                )
-
-                state0_val_loader = DataLoader(
-                    state0_val_dataset,
-                    batch_size=config.training.batch_size // 4,
-                    num_workers=config.data.num_workers,
-                    pin_memory=config.data.pin_memory,
-                    shuffle=False,
-                    follow_batch=[]
-                )
-
-                print(f"Mixed train samples: {len(mixed_dataset):,}")
-                print(f"State-0 val samples: {len(state0_val_dataset):,}")
-
-            # LR reduction at specified epoch
-            if epoch in lr_reduce_epoch and not lr_reduced:
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] *= config.training.lr_reduce_factor
-                lr_reduced = True
-                print(f"\nLR reduced by {config.training.lr_reduce_factor}x to {optimizer.param_groups[0]['lr']:.1e}")
-
-            # Select active loader
-            if use_state0 and mixed_train_loader is not None:
-                active_train_loader = mixed_train_loader
-                current_dataset = "state-0 mixed"
-            else:
-                active_train_loader = train_loader
-                current_dataset = "multi-state"
-
             current_lr = optimizer.param_groups[0]['lr']
             tracker.set_current_lr(current_lr)
 
@@ -825,13 +751,8 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
             if epoch_start_time:
                 epoch_start_time.record()
 
-            train_metrics = train_epoch_hetero(model, active_train_loader, criterion, optimizer, device, epoch)
+            train_metrics = train_epoch_hetero(model, train_loader, criterion, optimizer, device, epoch)
             val_metrics = evaluate_epoch_hetero(model, val_loader, criterion, device, epoch)
-
-            if state0_val_loader is not None:
-                state0_val_metrics = evaluate_epoch_hetero(model, state0_val_loader, criterion, device, epoch)
-            else:
-                state0_val_metrics = None
 
             if epoch_end_time:
                 epoch_end_time.record()
@@ -867,24 +788,22 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
             if is_best_solve_rate:
                 best_solve_rate = solve_rate
 
-            if isinstance(scheduler, ReduceLROnPlateau):
-                scheduler.step(solve_rate)
+            # Step scheduler
+            if scheduler is not None:
+                if isinstance(scheduler, ReduceLROnPlateau):
+                    scheduler.step(solve_rate)
+                else:
+                    scheduler.step()
 
             tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_solve_rate)
 
             # Logging
-            base_log = (f"Epoch {epoch:02d} [{current_dataset}] | "
+            base_log = (f"Epoch {epoch:02d} | "
                        f"Train: L={train_metrics['loss']:.4f} Acc={train_metrics['accuracy']:.3f} "
                        f"F1={train_metrics['f1']:.3f} T1={train_metrics['top1_accuracy']:.3f} | "
                        f"Val: L={val_metrics['loss']:.4f} Acc={val_metrics['accuracy']:.3f} "
                        f"F1={val_metrics['f1']:.3f} T1={val_metrics['top1_accuracy']:.3f} | "
-                       f"Solve: {solve_rate:.3f}")
-
-            if state0_val_metrics is not None:
-                base_log += (f" | S0-Val: F1={state0_val_metrics['f1']:.3f} "
-                            f"T1={state0_val_metrics['top1_accuracy']:.3f}")
-
-            base_log += f" | LR={current_lr:.1e}"
+                       f"Solve: {solve_rate:.3f} | LR={current_lr:.1e}")
             
             flags = []
             if is_best_f1:
