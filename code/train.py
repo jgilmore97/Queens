@@ -12,10 +12,12 @@ from data_loader import (
     HomogeneousQueensDataset,
     MixedDataset,
     create_filtered_old_dataset,
-    create_filtered_old_dataset_homogeneous
+    create_filtered_old_dataset_homogeneous,
+    get_combined_queens_loaders,
 )
 from config import Config
 from model import GAT, HeteroGAT, HRM
+from sweep.vectorized_eval import evaluate_solve_rate
 
 
 def calculate_top1_metrics(logits, labels, batch_info):
@@ -523,6 +525,8 @@ def create_scheduler(optimizer, config):
         return StepLR(optimizer, step_size=30, gamma=0.1)
     elif config.training.scheduler_type == "plateau":
         return ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5)
+    elif config.training.scheduler_type == "none":
+        return None
     else:
         raise ValueError(f"Unknown scheduler type: {config.training.scheduler_type}")
 
@@ -701,7 +705,7 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
         tracker.finish()
 
 def run_training_with_tracking_hetero(model, train_loader, val_loader, config, resume_id=None):
-    """Main training loop with top-1 metrics for heterogeneous models."""
+    """Main training loop for heterogeneous models."""
 
     tracker = ExperimentTracker(config, resume_id=resume_id)
 
@@ -714,96 +718,32 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
             lr=config.training.learning_rate,
             weight_decay=config.training.weight_decay
         )
-        scheduler = create_scheduler(optimizer, config)
 
         criterion = FocalLoss(
             alpha=config.training.focal_alpha,
             gamma=config.training.focal_gamma
         )
 
+        scheduler = create_scheduler(optimizer, config)
+
         best_val_f1 = 0.0
         best_val_top1 = 0.0
-        best_state0_val_f1 = 0.0
-        best_state0_val_top1 = 0.0
+        best_solve_rate = 0.0
         best_epoch = 0
         best_top1_epoch = 0
-
-        mixed_train_loader, state0_val_loader = None, None
-        current_dataset = "multi-state"
-        switched = False
 
         print(f"Starting HETEROGENEOUS training for {config.training.epochs} epochs")
         print(f"Device: {device}")
         print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-        print("Tracking both threshold-based and top-1 metrics with heterogeneous edges")
-        if config.model.model_type == "HRM":
-            print(f"Cycles: {config.model.n_cycles}, Micro-steps: {config.model.t_micro}")
-        if config.training.switch_epoch < config.training.epochs:
-            print(f"Will switch to mixed dataset (75% state-0, 25% old) at epoch {config.training.switch_epoch}")
+        print(f"Scheduler: {config.training.scheduler_type}")
+        if config.training.scheduler_type == "cosine":
+            print(f"  T_max: {config.training.cosine_t_max}, eta_min: {config.training.cosine_eta_min:.1e}")
+        print(f"Train samples: {len(train_loader.dataset):,}")
+        print(f"Val samples: {len(val_loader.dataset):,}")
 
         for epoch in range(1, config.training.epochs + 1):
-            if epoch == config.training.switch_epoch and mixed_train_loader is None:
-                print(f"\n🔄 Switching to mixed dataset at epoch {epoch}")
-                print(f"Loading state-0 dataset from {config.training.state0_json_path}")
-
-                from data_loader import get_queens_loaders
-
-                state0_train_dataset = QueensDataset(
-                    config.training.state0_json_path,
-                    split="train",
-                    val_ratio=config.training.val_ratio,
-                    seed=config.data.seed
-                )
-                state0_val_dataset = QueensDataset(
-                    config.training.state0_json_path,
-                    split="val",
-                    val_ratio=config.training.val_ratio,
-                    seed=config.data.seed
-                )
-
-                filtered_old_train_dataset = create_filtered_old_dataset(
-                    config.data.train_json,
-                    val_ratio=config.training.val_ratio,
-                    seed=config.data.seed,
-                    split="train"
-                )
-
-                mixed_dataset = MixedDataset(state0_train_dataset, filtered_old_train_dataset, config.training.mixed_ratio)
-
-                mixed_train_loader = DataLoader(
-                    mixed_dataset,
-                    batch_size=config.training.batch_size // 2,
-                    num_workers=config.data.num_workers,
-                    pin_memory=config.data.pin_memory,
-                    shuffle=True,
-                    follow_batch=[]
-                )
-
-                state0_val_loader = DataLoader(
-                    state0_val_dataset,
-                    batch_size=config.training.batch_size // 4,
-                    num_workers=config.data.num_workers,
-                    pin_memory=config.data.pin_memory,
-                    shuffle=False,
-                    follow_batch=[]
-                )
-
-                current_dataset = "mixed (75% state-0, 25% old)"
-                switched = True
-
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] /= 2
-                print(f"Divided learning rate by 2. Now: {optimizer.param_groups[0]['lr']:.1e}")
-
-                print(f"Mixed train samples: {len(mixed_dataset):,}")
-                print(f"State-0 val samples: {len(state0_val_dataset):,}")
-
-            if switched and mixed_train_loader is not None:
-                active_train_loader = mixed_train_loader
-                current_dataset = "mixed (75% state-0, 25% old)"
-            else:
-                active_train_loader = train_loader
-                current_dataset = "multi-state"
+            current_lr = optimizer.param_groups[0]['lr']
+            tracker.set_current_lr(current_lr)
 
             epoch_start_time = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
             epoch_end_time = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
@@ -811,25 +751,8 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
             if epoch_start_time:
                 epoch_start_time.record()
 
-            train_metrics = train_epoch_hetero(model, active_train_loader, criterion, optimizer, device, epoch)
+            train_metrics = train_epoch_hetero(model, train_loader, criterion, optimizer, device, epoch)
             val_metrics = evaluate_epoch_hetero(model, val_loader, criterion, device, epoch)
-
-            if state0_val_loader is not None:
-                state0_val_metrics = evaluate_epoch_hetero(model, state0_val_loader, criterion, device, epoch)
-            else:
-                state0_val_metrics = None
-
-            if isinstance(scheduler, ReduceLROnPlateau):
-                if state0_val_loader is not None:
-                    combined_f1 = 0.5 * val_metrics['f1'] + 0.5 * state0_val_metrics['f1']
-                    scheduler.step(combined_f1)
-                else:
-                    scheduler.step(val_metrics['f1'])
-            else:
-                scheduler.step()
-
-            current_lr = optimizer.param_groups[0]['lr']
-            tracker.set_current_lr(current_lr)
 
             if epoch_end_time:
                 epoch_end_time.record()
@@ -846,45 +769,58 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
                 device=device
             )
 
-            if state0_val_metrics is None:
-                is_best_f1 = val_metrics['f1'] > best_val_f1
-                is_best_top1 = val_metrics['top1_accuracy'] > best_val_top1
-            else:
-                is_best_f1 = state0_val_metrics['f1'] > best_state0_val_f1
-                is_best_top1 = state0_val_metrics['top1_accuracy'] > best_state0_val_top1
+            # Track best metrics
+            is_best_f1 = val_metrics['f1'] > best_val_f1
+            is_best_top1 = val_metrics['top1_accuracy'] > best_val_top1
 
             if is_best_f1:
-                if state0_val_metrics is not None:
-                    best_state0_val_f1 = state0_val_metrics['f1']
-                else:
-                    best_val_f1 = val_metrics['f1']
+                best_val_f1 = val_metrics['f1']
                 best_epoch = epoch
 
             if is_best_top1:
-                if state0_val_metrics is not None:
-                    best_state0_val_top1 = state0_val_metrics['top1_accuracy']
-                else:
-                    best_val_top1 = val_metrics['top1_accuracy']
+                best_val_top1 = val_metrics['top1_accuracy']
                 best_top1_epoch = epoch
 
-            tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_f1 or is_best_top1)
+            # Evaluate full solve rate
+            solve_stats = evaluate_solve_rate(model, config.data.auto_reg_json, device)
+            solve_rate = solve_stats['solve_rate']
+            is_best_solve_rate = solve_rate > best_solve_rate
+            if is_best_solve_rate:
+                best_solve_rate = solve_rate
 
-            base_log = (f"Epoch {epoch:02d} [{current_dataset}] | "
-                       f"Train: L={train_metrics['loss']:.4f} Acc={train_metrics['accuracy']:.3f} P={train_metrics['precision']:.3f} "
-                       f"R={train_metrics['recall']:.3f} F1={train_metrics['f1']:.3f} T1={train_metrics['top1_accuracy']:.3f} | "
-                       f"Val: L={val_metrics['loss']:.4f} Acc={val_metrics['accuracy']:.3f} P={val_metrics['precision']:.3f} "
-                       f"R={val_metrics['recall']:.3f} F1={val_metrics['f1']:.3f} T1={val_metrics['top1_accuracy']:.3f}")
-            if state0_val_metrics is not None:
-                base_log += (f" | State0-Val: Acc={state0_val_metrics['accuracy']:.3f} P={state0_val_metrics['precision']:.3f} "
-                             f"R={state0_val_metrics['recall']:.3f} F1={state0_val_metrics['f1']:.3f} "
-                             f"T1={state0_val_metrics['top1_accuracy']:.3f}")
-            base_log += f" | LR={current_lr:.1e} | {'[F1]' if is_best_f1 else ''}{'[T1]' if is_best_top1 else ''}"
+            # Step scheduler
+            if scheduler is not None:
+                if isinstance(scheduler, ReduceLROnPlateau):
+                    scheduler.step(solve_rate)
+                else:
+                    scheduler.step()
+
+            tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_solve_rate)
+
+            # Logging
+            base_log = (f"Epoch {epoch:02d} | "
+                       f"Train: L={train_metrics['loss']:.4f} Acc={train_metrics['accuracy']:.3f} "
+                       f"F1={train_metrics['f1']:.3f} T1={train_metrics['top1_accuracy']:.3f} | "
+                       f"Val: L={val_metrics['loss']:.4f} Acc={val_metrics['accuracy']:.3f} "
+                       f"F1={val_metrics['f1']:.3f} T1={val_metrics['top1_accuracy']:.3f} | "
+                       f"Solve: {solve_rate:.3f} | LR={current_lr:.1e}")
+            
+            flags = []
+            if is_best_f1:
+                flags.append("F1")
+            if is_best_top1:
+                flags.append("T1")
+            if is_best_solve_rate:
+                flags.append("Solve")
+            if flags:
+                base_log += f" | [{'+'.join(flags)}]"
+
             print(base_log)
 
-        print(f"\nHETEROGENEOUS Training completed!")
+        print(f"\nTraining completed!")
         print(f"Best validation F1: {best_val_f1:.4f} (epoch {best_epoch})")
-        print(f"Best validation Top-1 Accuracy: {best_val_top1:.4f} (epoch {best_top1_epoch})")
-        print(f"📊 Mixed training should improve early-game performance while preserving multi-state knowledge")
+        print(f"Best validation Top-1: {best_val_top1:.4f} (epoch {best_top1_epoch})")
+        print(f"Best solve rate: {best_solve_rate:.3f}")
 
         return model, best_val_f1
 

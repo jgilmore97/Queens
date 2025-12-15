@@ -58,22 +58,29 @@ class TrainingConfig:
     weight_decay: float = 1e-5
     val_ratio: float = 0.10
 
-    switch_epoch: int = 5  # Epoch to switch to state-0 dataset (999 = never)
+    # Dataset combination
+    combine_state0: bool = True  # Combine state-0 into training set upfront
     state0_json_path: str = "data/State0TrainingSet.json"
-    mixed_ratio: float = 0.5  # Ratio of state-0 puzzles in mixed training
+    
+    # Legacy curriculum options (unused when combine_state0=True)
+    state0_epochs: list = field(default_factory=lambda: [])
+    lr_reduce_epoch: list = field(default_factory=lambda: [])
+    lr_reduce_factor: float = 0.5
+    mixed_ratio: float = 0.75
 
     focal_alpha: float = 0.3
     focal_gamma: float = 2.0
 
-    scheduler_type: str = "plateau"
-    cosine_t_max: int = 100
+    # Scheduler
+    scheduler_type: str = "cosine"  # "cosine", "plateau", "step", "none"
+    cosine_t_max: int = 18  # Should match epochs
     cosine_eta_min: float = 1e-6
 
 @dataclass
 class DataConfig:
     """Data loading configuration."""
     train_json: str = "data/StateTrainingSet.json"
-    test_json: str = "StateValSet.json"
+    auto_reg_json: str = "data/StateValSet.json"
     num_workers: int = 0 if _detect_notebook_environment() else 4
     pin_memory: bool = True
     shuffle_train: bool = True
@@ -142,9 +149,9 @@ class Config:
 
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "Benchmark transformer model run",
-        "tags": ["benchmark", "transformer"],
-        "notes": "Benchmarking non-graph transformer model against HRM models"
+        "experiment_name": "HRM combine datasets for full run, use cosine annealing. 18 epochs",
+        "tags": ["HRM", "cosine_annealing", "combined_data"],
+        "notes": "Combining state-0 data into training set upfront and using cosine annealing scheduler."
     }
 }
 
