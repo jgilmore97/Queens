@@ -325,10 +325,14 @@ def get_combined_queens_loaders(
 class MixedDataset(Dataset):
     """Dataset that mixes two datasets with stochastic sampling, ensuring all examples are used before reuse."""
 
-    def __init__(self, dataset1, dataset2, ratio1=0.75):
+    def __init__(self, dataset1, dataset2, ratio1=0.75, seed: int = 42):
         self.dataset1 = dataset1
         self.dataset2 = dataset2
         self.ratio1 = ratio1
+        self.seed = seed
+
+        # Use seeded Random instance for reproducibility
+        self._rng = random.Random(seed)
 
         self.remaining_pool1 = list(range(len(dataset1)))
         self.remaining_pool2 = list(range(len(dataset2)))
@@ -342,15 +346,15 @@ class MixedDataset(Dataset):
         print(f"  Epoch length: {self._len}")
 
     def _shuffle_pools(self):
-        """Shuffle both remaining pools."""
-        random.shuffle(self.remaining_pool1)
-        random.shuffle(self.remaining_pool2)
+        """Shuffle both remaining pools using seeded RNG."""
+        self._rng.shuffle(self.remaining_pool1)
+        self._rng.shuffle(self.remaining_pool2)
 
     def _sample_from_pool1(self):
         """Sample from dataset1, refill pool if exhausted."""
         if not self.remaining_pool1:
             self.remaining_pool1 = list(range(len(self.dataset1)))
-            random.shuffle(self.remaining_pool1)
+            self._rng.shuffle(self.remaining_pool1)
 
         idx = self.remaining_pool1.pop()
         return self.dataset1[idx]
@@ -359,14 +363,14 @@ class MixedDataset(Dataset):
         """Sample from dataset2, refill pool if exhausted."""
         if not self.remaining_pool2:
             self.remaining_pool2 = list(range(len(self.dataset2)))
-            random.shuffle(self.remaining_pool2)
+            self._rng.shuffle(self.remaining_pool2)
 
         idx = self.remaining_pool2.pop()
         return self.dataset2[idx]
 
     def __getitem__(self, idx):
         """Stochastically sample from either dataset based on ratio."""
-        if random.random() < self.ratio1:
+        if self._rng.random() < self.ratio1:
             return self._sample_from_pool1()
         else:
             return self._sample_from_pool2()
