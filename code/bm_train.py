@@ -1,5 +1,7 @@
 """Training scripts for benchmark models."""
 
+import random
+import numpy as np
 import torch
 from config import Config
 from data_loader import get_benchmark_loaders
@@ -7,6 +9,18 @@ from bm_model import BenchmarkComparisonModel
 from train import FocalLoss, create_scheduler
 from experiment_tracker import ExperimentTracker
 from tqdm.auto import tqdm
+
+
+def set_seed(seed: int = 42) -> None:
+    """Set random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 def calculate_top1_metrics(
     logits: torch.Tensor,
@@ -194,6 +208,9 @@ def benchmark_training(
     val_loader: torch.utils.data.DataLoader,
     config: Config
 ):
+    # Set seeds for reproducibility
+    set_seed(config.data.seed)
+
     tracker = ExperimentTracker(config)
 
     try:

@@ -1,3 +1,5 @@
+import random
+import numpy as np
 import torch
 from torch import nn, optim
 import torch.nn.functional as F
@@ -8,6 +10,18 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 import traceback
 from train import FocalLoss
+
+
+def set_seed(seed: int = 42) -> None:
+    """Set random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -101,6 +115,9 @@ def objective(
     Optuna objective function.
     Trains HRM for 6 epochs (2 pre-switch + 4 post-switch).
     """
+    # Set seeds for reproducibility at the start of each trial
+    set_seed(seed)
+
     # Resolve paths relative to project root
     root = get_project_root()
     train_json = str(root / train_json)
@@ -184,7 +201,8 @@ def objective(
         mixed_dataset = MixedDataset(
             state0_dataset,
             filtered_old_dataset,
-            ratio1=mixed_ratio
+            ratio1=mixed_ratio,
+            seed=seed
         )
         mixed_loader = DataLoader(
             mixed_dataset,
