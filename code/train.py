@@ -72,15 +72,7 @@ def calculate_top1_metrics_hetero(logits, labels, batch_info):
     """Calculate top-1 metrics for heterogeneous graph data."""
     device = logits.device
 
-    if hasattr(batch_info, 'batch_dict') and 'cell' in batch_info.batch_dict:
-        batch_indices = batch_info.batch_dict['cell']
-    elif hasattr(batch_info, '_slice_dict') and 'cell' in batch_info._slice_dict:
-        slices = batch_info._slice_dict['cell']['x']
-        batch_indices = torch.zeros(len(logits), dtype=torch.long, device=device)
-        for i in range(len(slices) - 1):
-            batch_indices[slices[i]:slices[i+1]] = i
-    else:
-        batch_indices = torch.zeros(len(logits), dtype=torch.long, device=device)
+    batch_indices = batch_info['cell'].batch
 
     unique_batches, inverse_indices = torch.unique(batch_indices, return_inverse=True)
     num_graphs = len(unique_batches)
@@ -223,20 +215,20 @@ def train_epoch_hetero(model, loader, criterion, optimizer, device, epoch):
         batch = batch.to(device)
         optimizer.zero_grad()
 
-        if hasattr(batch, 'x_dict'):
-            logits = model(batch.x_dict, batch.edge_index_dict)
-            labels = batch.y_dict['cell']
-            num_nodes = batch['cell'].num_nodes
-        else:
-            x_dict = {'cell': batch['cell'].x}
-            edge_index_dict = {
-                ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
-                ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
-                ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
-            }
-            logits = model(x_dict, edge_index_dict)
-            labels = batch['cell'].y
-            num_nodes = len(labels)
+        # if hasattr(batch, 'x_dict'):
+        logits = model(batch)
+        labels = batch['cell'].y
+        num_nodes = batch['cell'].num_nodes
+        # else:
+        #     x_dict = {'cell': batch['cell'].x}
+        #     edge_index_dict = {
+        #         ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
+        #         ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
+        #         ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
+        #     }
+        #     logits = model(x_dict, edge_index_dict)
+        #     labels = batch['cell'].y
+        #     num_nodes = len(labels)
 
         loss = criterion(logits, labels.float())
 
@@ -423,8 +415,8 @@ def evaluate_epoch_hetero(model, loader, criterion, device, epoch):
         batch = batch.to(device)
 
         if hasattr(batch, 'x_dict'):
-            logits = model(batch.x_dict, batch.edge_index_dict)
-            labels = batch.y_dict['cell']
+            logits = model(batch)
+            labels = batch['cell'].y
             num_nodes = batch['cell'].num_nodes
         else:
             x_dict = {'cell': batch['cell'].x}

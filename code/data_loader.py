@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
+from torch.utils.data import Sampler
 from torch_geometric.data import Data, HeteroData, Dataset
 from torch_geometric.loader import DataLoader
 from torch.utils.data import Dataset as vanillaDataset, DataLoader as vanillaDataLoader, ConcatDataset
@@ -220,6 +221,58 @@ class QueensDataset(Dataset):
         data.meta = dict(source=e["source"], iteration=e["iteration"])
 
         return data
+    
+class SizeBucketBatchSampler(Sampler):
+    def __init__(self, dataset: QueensDataset, batch_size: int, shuffle: bool = True, drop_last: bool = True):
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.drop_last = drop_last
+        
+        # Group indices by size
+        self.size_buckets: Dict[int, List[int]] = {}
+
+        # Handle ConcatDataset vs QueensDataset
+        if hasattr(dataset, 'records'):
+            records = dataset.records
+        elif hasattr(dataset, 'datasets'):
+            records = []
+            for ds in dataset.datasets:
+                records.extend(ds.records)
+        else:
+            raise TypeError("Unsupported dataset type")
+        
+        for idx, record in enumerate(records):
+            n = len(record['region'])
+            self.size_buckets.setdefault(n, []).append(idx)
+        #print the number of puzzles for each size
+        print(f"Size buckets: {{{', '.join(f'{n}x{n}: {len(idxs)}' for n, idxs in sorted(self.size_buckets.items()))}}}")
+    
+    def __iter__(self):
+        batches = []
+        
+        for indices in self.size_buckets.values():
+            if self.shuffle:
+                indices = indices.copy()
+                random.shuffle(indices)
+            
+            for i in range(0, len(indices), self.batch_size):
+                batch = indices[i:i + self.batch_size]
+                if len(batch) == self.batch_size or not self.drop_last:
+                    batches.append(batch)
+        
+        if self.shuffle:
+            random.shuffle(batches)
+        
+        yield from batches
+    
+    def __len__(self):
+        count = 0
+        for indices in self.size_buckets.values():
+            n_batches = len(indices) // self.batch_size
+            if not self.drop_last and len(indices) % self.batch_size:
+                n_batches += 1
+            count += n_batches
+        return count
 
 def get_queens_loaders(
     json_path: str,
@@ -231,6 +284,8 @@ def get_queens_loaders(
     pin_memory: bool = True,
     follow_batch: list[str] | None = None,
     shuffle_train: bool = True,
+    same_size_batches: bool = True,
+    drop_last: bool = True,
 ):
     """Return (train_loader, val_loader) with heterogeneous edge support."""
     ds_train = QueensDataset(
@@ -247,14 +302,21 @@ def get_queens_loaders(
     )
 
     kwargs = dict(
-        batch_size=batch_size,
         num_workers=num_workers,
         pin_memory=pin_memory,
         follow_batch=follow_batch or [],
     )
 
-    train_loader = DataLoader(ds_train, shuffle=shuffle_train, **kwargs)
-    val_loader   = DataLoader(ds_val,   shuffle=False,        **kwargs)
+    if same_size_batches:
+        train_sampler = SizeBucketBatchSampler(ds_train, batch_size=batch_size, shuffle=shuffle_train, drop_last=drop_last)
+        val_sampler = SizeBucketBatchSampler(ds_val, batch_size=batch_size, shuffle=False, drop_last=False)
+
+        train_loader = DataLoader(ds_train, batch_sampler = train_sampler, **kwargs)
+        val_loader   = DataLoader(ds_val, batch_sampler = val_sampler, **kwargs)
+    
+    else:
+        train_loader = DataLoader(ds_train, shuffle=shuffle_train, batch_size = batch_size, **kwargs)
+        val_loader = DataLoader(ds_val, shuffle=False, batch_size = batch_size, **kwargs)
 
     return train_loader, val_loader
 
@@ -269,6 +331,8 @@ def get_combined_queens_loaders(
     pin_memory: bool = True,
     follow_batch: list[str] | None = None,
     shuffle_train: bool = True,
+    same_size_batches: bool = False,
+    drop_last: bool = False,
 ):
     """Return (train_loader, val_loader) with multi-state + state-0 combined upfront."""
     
@@ -311,14 +375,20 @@ def get_combined_queens_loaders(
     print(f"  Total val: {len(combined_val):,}")
     
     kwargs = dict(
-        batch_size=batch_size,
         num_workers=num_workers,
         pin_memory=pin_memory,
         follow_batch=follow_batch or [],
     )
 
-    train_loader = DataLoader(combined_train, shuffle=shuffle_train, **kwargs)
-    val_loader = DataLoader(combined_val, shuffle=False, **kwargs)
+    if same_size_batches:
+        train_sampler = SizeBucketBatchSampler(combined_train, batch_size=batch_size, shuffle=shuffle_train, drop_last=drop_last)
+        val_sampler = SizeBucketBatchSampler(combined_val, batch_size=batch_size, shuffle=False, drop_last=False)
+
+        train_loader = DataLoader(combined_train, batch_sampler = train_sampler, **kwargs)
+        val_loader   = DataLoader(combined_val, batch_sampler = val_sampler, **kwargs)
+    else:
+        train_loader = DataLoader(combined_train, shuffle=shuffle_train, batch_size=batch_size, **kwargs)
+        val_loader = DataLoader(combined_val, shuffle=False, batch_size=batch_size, **kwargs)
 
     return train_loader, val_loader
 

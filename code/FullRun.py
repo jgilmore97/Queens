@@ -4,7 +4,7 @@ from pathlib import Path
 
 from train import run_training_with_tracking_hetero, run_training_with_tracking
 from model import GAT, HeteroGAT, HRM
-from data_loader import get_queens_loaders, get_benchmark_loaders, get_combined_queens_loaders
+from data_loader import get_queens_loaders, get_benchmark_loaders, get_combined_queens_loaders, SizeBucketBatchSampler
 from config import Config, BASELINE_CONFIG, BenchmarkConfig
 from bm_model import BenchmarkComparisonModel
 from bm_train import benchmark_training
@@ -44,6 +44,7 @@ def main_heterogeneous_training():
         num_workers=hetero_config.data.num_workers,
         pin_memory=hetero_config.data.pin_memory,
         shuffle_train=hetero_config.data.shuffle_train,
+        sampler = hetero_config.training.batch_sampler
     )
 
     print(f"Train samples: {len(train_loader.dataset):,}")
@@ -114,6 +115,8 @@ def main_hrm_training():
             num_workers=hrm_config.data.num_workers,
             pin_memory=hrm_config.data.pin_memory,
             shuffle_train=hrm_config.data.shuffle_train,
+            same_size_batches=hrm_config.training.same_size_batches,
+            drop_last=hrm_config.training.drop_last
         )
     else:
         train_loader, val_loader = get_queens_loaders(
@@ -124,6 +127,8 @@ def main_hrm_training():
             num_workers=hrm_config.data.num_workers,
             pin_memory=hrm_config.data.pin_memory,
             shuffle_train=hrm_config.data.shuffle_train,
+            same_size_batches=hrm_config.training.same_size_batches,
+            drop_last=hrm_config.training.drop_last
         )
 
     print(f"Train samples: {len(train_loader.dataset):,}")

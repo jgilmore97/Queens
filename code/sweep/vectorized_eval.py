@@ -1,15 +1,14 @@
 import torch
 import numpy as np
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple
 from torch_geometric.loader import DataLoader
+from torch_geometric.data import Batch, HeteroData
 from pathlib import Path
-import json
-from torch_geometric.data import Batch
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from data_loader import QueensDataset, build_heterogeneous_edge_index_cached
+from data_loader import QueensDataset
 
 
 class Step0Dataset(QueensDataset):
@@ -22,7 +21,6 @@ class Step0Dataset(QueensDataset):
             val_ratio=val_ratio,
             seed=seed
         )
-        # Filter to step-0 only
         self.records = [r for r in self.records if r.get('step', 0) == 0]
         print(f"Step0Dataset: {len(self.records)} step-0 puzzles")
 
@@ -42,16 +40,16 @@ def evaluate_solve_rate(
     model.eval()
 
     dataset = Step0Dataset(val_json_path, val_ratio=val_ratio, seed=seed)
-    
-    # Group puzzles by size
+
+    # Group puzzles by size (required for batching since H-module needs uniform C per batch)
     size_groups = {}
     for idx in range(len(dataset)):
         record = dataset.records[idx]
-        n = len(record['region'])  # board size
+        n = len(record['region'])
         if n not in size_groups:
             size_groups[n] = []
         size_groups[n].append(idx)
-    
+
     print(f"Puzzle sizes: {{{', '.join(f'{n}x{n}: {len(idxs)}' for n, idxs in sorted(size_groups.items()))}}}")
 
     total_puzzles = 0
@@ -60,19 +58,16 @@ def evaluate_solve_rate(
 
     with torch.no_grad():
         for n, indices in size_groups.items():
-            # Create subset dataset for this size
             subset_records = [dataset.records[i] for i in indices]
-            
-            # Process in batches
+
             for batch_start in range(0, len(subset_records), batch_size):
                 batch_end = min(batch_start + batch_size, len(subset_records))
                 batch_records = subset_records[batch_start:batch_end]
-                
-                # Build batch manually
+
                 batch_data = [dataset.get(indices[batch_start + i]) for i in range(len(batch_records))]
                 batch = Batch.from_data_list(batch_data)
                 batch = batch.to(device)
-                
+
                 batch_solved, batch_total, batch_errors = _evaluate_batch(model, batch, device, n)
 
                 solved_puzzles += batch_solved
@@ -91,11 +86,41 @@ def evaluate_solve_rate(
     }
 
 
+class _MutableBatch:
+    """
+    Wrapper that presents a mutable view of batch data for autoregressive inference.
+    Allows modifying node features while preserving the batch interface expected by HRM.
+    """
+    def __init__(self, batch, x_cell: torch.Tensor):
+        self._batch = batch
+        self._x_cell = x_cell
+
+    @property
+    def x_dict(self) -> Dict[str, torch.Tensor]:
+        return {'cell': self._x_cell}
+
+    @property
+    def edge_index_dict(self) -> Dict[Tuple[str, str, str], torch.Tensor]:
+        return {
+            ('cell', 'line_constraint', 'cell'): self._batch[('cell', 'line_constraint', 'cell')].edge_index,
+            ('cell', 'region_constraint', 'cell'): self._batch[('cell', 'region_constraint', 'cell')].edge_index,
+            ('cell', 'diagonal_constraint', 'cell'): self._batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
+        }
+
+    @property
+    def num_graphs(self) -> int:
+        return self._batch.num_graphs
+
+    def update_x(self, x_cell: torch.Tensor):
+        """Update node features for next autoregressive step."""
+        self._x_cell = x_cell
+
+
 def _evaluate_batch(
     model: torch.nn.Module,
     batch,
     device: str,
-    n: int 
+    n: int
 ) -> Tuple[int, int, Dict[int, int]]:
     """
     Evaluate a single batch of puzzles autoregressively.
@@ -104,22 +129,17 @@ def _evaluate_batch(
     x = batch['cell'].x.clone()
     y = batch['cell'].y
     batch_indices = batch['cell'].batch
+    num_graphs = batch.num_graphs
 
-    edge_index_dict = {
-        ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
-        ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
-        ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
-    }
-
-    num_graphs = batch_indices.max().item() + 1
+    # Create mutable batch wrapper for autoregressive updates
+    mutable_batch = _MutableBatch(batch, x)
 
     still_correct = torch.ones(num_graphs, dtype=torch.bool, device=device)
     first_error_step = torch.full((num_graphs,), -1, dtype=torch.long, device=device)
     placed = torch.zeros_like(y, dtype=torch.bool)
 
     for step in range(n):
-        x_dict = {'cell': x}
-        logits = model(x_dict, edge_index_dict)
+        logits = model(mutable_batch)
 
         masked_logits = logits.clone()
         masked_logits[placed] = float('-inf')
@@ -133,8 +153,10 @@ def _evaluate_batch(
         first_error_step[just_failed] = step
         still_correct = still_correct & is_correct
 
+        # Update state for next step
         placed[selected_nodes] = True
         x[selected_nodes, -1] = 1.0
+        mutable_batch.update_x(x)
 
     solved_count = still_correct.sum().item()
     total_count = num_graphs
@@ -147,6 +169,7 @@ def _evaluate_batch(
 
     return solved_count, total_count, error_by_step
 
+
 def _batched_argmax(
     logits: torch.Tensor,
     batch_indices: torch.Tensor,
@@ -154,33 +177,25 @@ def _batched_argmax(
 ) -> torch.Tensor:
     """
     Compute argmax of logits within each graph.
-    Returns:
-        [num_graphs] tensor of selected node indices (global indices into logits)
+    Returns [num_graphs] tensor of selected node indices (global indices into logits).
     """
     device = logits.device
 
-    # Get max nodes per graph for padding
     nodes_per_graph = torch.bincount(batch_indices, minlength=num_graphs)
     max_nodes = nodes_per_graph.max().item()
 
-    # Create padded matrix [num_graphs, max_nodes]
     logits_matrix = torch.full((num_graphs, max_nodes), float('-inf'), device=device)
 
-    # Compute position within each graph
-    position_in_graph = torch.zeros_like(batch_indices)
-    for g in range(num_graphs):
-        mask = (batch_indices == g)
-        position_in_graph[mask] = torch.arange(mask.sum(), device=device)
+    # Compute position within each graph (vectorized)
+    graph_offsets = torch.zeros(num_graphs + 1, dtype=torch.long, device=device)
+    graph_offsets[1:] = nodes_per_graph.cumsum(0)
+    position_in_graph = torch.arange(len(batch_indices), device=device) - graph_offsets[batch_indices]
 
     logits_matrix[batch_indices, position_in_graph] = logits
 
-    local_argmax = logits_matrix.argmax(dim=1)  # [num_graphs]
+    local_argmax = logits_matrix.argmax(dim=1)
 
-    # Convert local index back to global node index
-    # For each graph g, global_index = (start of graph g) + local_argmax[g]
-    graph_starts = torch.zeros(num_graphs, dtype=torch.long, device=device)
-    graph_starts[1:] = nodes_per_graph[:-1].cumsum(0)
-
+    graph_starts = graph_offsets[:-1]
     global_argmax = graph_starts + local_argmax
 
     return global_argmax

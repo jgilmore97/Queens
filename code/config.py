@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
 import torch
 import os
+from data_loader import SizeBucketBatchSampler
 
 def _detect_notebook_environment():
     """Detect if running in a notebook environment."""
@@ -61,6 +62,10 @@ class TrainingConfig:
     # Dataset combination
     combine_state0: bool = True  # Combine state-0 into training set upfront
     state0_json_path: str = "data/State0TrainingSet.json"
+
+    # Batch sampler options
+    same_size_batches: bool = True  # Use size-based batching
+    drop_last: bool = True  # Drop last incomplete batch
     
     # Legacy curriculum options (unused when combine_state0=True)
     state0_epochs: list = field(default_factory=lambda: [])
@@ -149,9 +154,9 @@ class Config:
 
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "HRM combine datasets for full run, use cosine annealing. 18 epochs",
-        "tags": ["HRM", "cosine_annealing", "combined_data"],
-        "notes": "Combining state-0 data into training set upfront and using cosine annealing scheduler."
+        "experiment_name": "Hmod pooling quick fixes.",
+        "tags": ["HRM", "cosine_annealing", "combined_data", "pooling", "Hmod"],
+        "notes": "Testing HRM with global pooling and Hmod architecture"
     }
 }
 
