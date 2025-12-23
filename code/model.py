@@ -289,15 +289,19 @@ class _FiLM(nn.Module):
         d = nodes.shape[-1]
         assert d == self.hidden_dim, f"nodes last dim {d} != hidden_dim {self.hidden_dim}"
 
-        gb = self.fc2(self.act(self.fc1(z_h)))
-        gamma, beta = gb.chunk(2, dim=-1)
+        # Handle both [d] (shared z) and [B, d] (per-graph z) inputs
+        if z_h.dim() == 1:
+            z_h = z_h.unsqueeze(0).expand(B, -1)  # [d] -> [B, d]
+
+        gb = self.fc2(self.act(self.fc1(z_h)))  # [B, 2d]
+        gamma, beta = gb.chunk(2, dim=-1)  # each [B, d]
 
         # Mildly bound modulation for stability.
         gamma = 0.1 * torch.tanh(gamma)
         beta = 0.1 * torch.tanh(beta)
 
         nodes = nodes.view(B, C, d)
-        out = (1.0 + gamma)[:, None, :] * nodes + beta[:, None, :]
+        out = (1.0 + gamma)[:, None, :] * nodes + beta[:, None, :]  # [B, C, d]
         return out.view(B * C, d)
 
 class _LBlock(nn.Module):
@@ -477,12 +481,16 @@ class _Readout(nn.Module):
     def forward(self, nodes, z_h, batch_size: int):
         """
         nodes: [B*C, d]
-        z_h:   [B, d]
+        z_h:   [B, d] or [d]
         returns: [B*C] logits
         """
         B = batch_size
         C = nodes.shape[0] // B
         d = nodes.shape[-1]
+
+        # Handle both [d] (shared z) and [B, d] (per-graph z) inputs
+        if z_h.dim() == 1:
+            z_h = z_h.unsqueeze(0).expand(B, -1)  # [d] -> [B, d]
 
         nodes_ = nodes.view(B, C, d)              # [B, C, d]
         z_ = z_h[:, None, :].expand(B, C, d)      # [B, C, d] broadcast
@@ -507,12 +515,14 @@ class HRM(nn.Module):
         t_micro: int = 2,
         use_input_injection: bool = True,
         z_dim: int = 256,
+        use_hmod: bool = False
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.n_cycles = n_cycles
         self.t_micro = t_micro
         self.use_input_injection = use_input_injection
+        self.use_hmod = use_hmod
 
         self.edge_types = [
             ('cell', 'line_constraint', 'cell'),
@@ -548,14 +558,17 @@ class HRM(nn.Module):
 
         self.readout = _Readout(hidden_dim, dropout)
 
-        self.z0 = nn.Parameter(torch.zeros(hidden_dim))
-
-        # self.z_per_cycle = nn.ParameterList([
-        #     nn.Parameter(torch.randn(z_dim) * 0.02)
-        #     for _ in range(n_cycles)
-        # ])
-
-        # self.z_proj = nn.Linear(z_dim, hidden_dim)
+        if self.use_hmod:
+            # "new" path
+            self.h_mod = _HModule(hidden_dim=hidden_dim, dropout=dropout, num_heads=hgt_heads)
+            self.z0 = nn.Parameter(torch.zeros(hidden_dim))
+        else:
+            # "old" path
+            self.z_per_cycle = nn.ParameterList([
+                nn.Parameter(torch.randn(z_dim) * 0.02)
+                for _ in range(n_cycles)
+            ])
+            self.z_proj = nn.Linear(z_dim, hidden_dim)
 
     def forward(self, batch, return_intermediates=False):
         """
@@ -575,32 +588,42 @@ class HRM(nn.Module):
         # zh0 = torch.zeros(B, self.hidden_dim, device=x_in.device)
         # z = zh0
 
-        z = self.z0[None, :].expand(B, -1)
-
         if return_intermediates:
             L_states = []
 
-        for cycle_idx in range(self.n_cycles):
-            for micro_idx in range(self.t_micro):
-                nodes = self.l_block(
-                    nodes,
-                    edge_index_dict,
-                    z,
-                    batch_size=B,
-                    x_cell_embedded=nodes_embedded if self.use_input_injection else None
-                )
+        if self.use_hmod:
+            z = self.z0[None, :].expand(B, -1) # [B, d]
+            for cycle_idx in range(self.n_cycles):
+                for micro_idx in range(self.t_micro):
+                    nodes = self.l_block(
+                        nodes,
+                        edge_index_dict,
+                        z,
+                        batch_size=B,
+                        x_cell_embedded=nodes_embedded if self.use_input_injection else None
+                    )
+                    if return_intermediates:
+                        L_states.append(nodes.detach().cpu())
 
-                if return_intermediates:
-                    L_states.append(nodes.detach().cpu())
+                z = self.h_mod(nodes, z, batch_size=B, return_attention=False)
 
-            z = self.h_mod(
-                nodes,
-                z,
-                batch_size=B,
-                return_attention=False
-            )
+            logits = self.readout(nodes, z, batch_size=B)
 
-        logits = self.readout(nodes, z, batch_size=B)
+        else:
+            for cycle_idx in range(self.n_cycles):
+                z = self.z_proj(self.z_per_cycle[cycle_idx])  # [d], not derived from nodes
+                for micro_idx in range(self.t_micro):
+                    nodes = self.l_block(
+                        nodes,
+                        edge_index_dict,
+                        z,
+                        x_cell_embedded=nodes_embedded if self.use_input_injection else None,
+                        batch_size=B
+                    )
+                    if return_intermediates:
+                        L_states.append(nodes.detach().cpu())
+
+            logits = self.readout(nodes, z, batch_size=B)
 
         if return_intermediates:
             intermediates = {

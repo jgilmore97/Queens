@@ -116,7 +116,7 @@ def main_hrm_training():
             pin_memory=hrm_config.data.pin_memory,
             shuffle_train=hrm_config.data.shuffle_train,
             same_size_batches=hrm_config.training.same_size_batches,
-            drop_last=hrm_config.training.drop_last
+            drop_last=hrm_config.training.drop_last        
         )
     else:
         train_loader, val_loader = get_queens_loaders(
@@ -128,7 +128,7 @@ def main_hrm_training():
             pin_memory=hrm_config.data.pin_memory,
             shuffle_train=hrm_config.data.shuffle_train,
             same_size_batches=hrm_config.training.same_size_batches,
-            drop_last=hrm_config.training.drop_last
+            drop_last=hrm_config.training.drop_last        
         )
 
     print(f"Train samples: {len(train_loader.dataset):,}")
@@ -141,11 +141,12 @@ def main_hrm_training():
         gat_heads=hrm_config.model.gat_heads,
         hgt_heads=hrm_config.model.hgt_heads,
         dropout=hrm_config.model.dropout,
-        use_batch_norm=True,
+        use_batch_norm=hrm_config.model.use_batch_norm,
         n_cycles=hrm_config.model.n_cycles,
         t_micro=hrm_config.model.t_micro,
         use_input_injection=hrm_config.model.use_input_injection,
         z_dim=hrm_config.model.z_dim,
+        use_hmod=hrm_config.model.use_hmod
     )
 
     total_params = sum(p.numel() for p in model.parameters())

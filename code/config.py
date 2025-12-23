@@ -28,6 +28,7 @@ class ModelConfig:
     hidden_dim: int = 128
     layer_count: int = 6
     dropout: float = 0.1
+    use_batch_norm: bool = False
 
     gat_heads: int = 2
     hgt_heads: int = 4
@@ -40,6 +41,7 @@ class ModelConfig:
     t_micro: int = 2
     use_input_injection: bool = True
     z_dim: int = 256
+    use_hmod: bool = False
 
     input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])
 
@@ -154,9 +156,9 @@ class Config:
 
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "Hmod pooling quick fixes.",
-        "tags": ["HRM", "cosine_annealing", "combined_data", "pooling", "Hmod"],
-        "notes": "Testing HRM with global pooling and Hmod architecture"
+        "experiment_name": "No hmod, per cycle Z with same size batche. remove batch norm",
+        "tags": ["HRM", "cosine_annealing", "combined_data", "Z per_cycle"],
+        "notes": "Testing to see if old per z cycle approach is harmed by fixed batch sizes"
     }
 }
 
