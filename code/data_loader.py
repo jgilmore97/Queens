@@ -228,10 +228,8 @@ class SizeBucketBatchSampler(Sampler):
         self.shuffle = shuffle
         self.drop_last = drop_last
         
-        # Group indices by size
         self.size_buckets: Dict[int, List[int]] = {}
 
-        # Handle ConcatDataset vs QueensDataset
         if hasattr(dataset, 'records'):
             records = dataset.records
         elif hasattr(dataset, 'datasets'):
@@ -244,7 +242,6 @@ class SizeBucketBatchSampler(Sampler):
         for idx, record in enumerate(records):
             n = len(record['region'])
             self.size_buckets.setdefault(n, []).append(idx)
-        #print the number of puzzles for each size
         print(f"Size buckets: {{{', '.join(f'{n}x{n}: {len(idxs)}' for n, idxs in sorted(self.size_buckets.items()))}}}")
     
     def __iter__(self):
@@ -336,7 +333,6 @@ def get_combined_queens_loaders(
 ):
     """Return (train_loader, val_loader) with multi-state + state-0 combined upfront."""
     
-    # Multi-state datasets
     ds_multistate_train = QueensDataset(
         multistate_json,
         split="train",
@@ -364,7 +360,6 @@ def get_combined_queens_loaders(
         seed=seed,
     )
     
-    # Combine train sets
     combined_train = ConcatDataset([ds_multistate_train, ds_state0_train])
     combined_val = ConcatDataset([ds_multistate_val, ds_state0_val])
     
@@ -401,7 +396,6 @@ class MixedDataset(Dataset):
         self.ratio1 = ratio1
         self.seed = seed
 
-        # Use seeded Random instance for reproducibility
         self._rng = random.Random(seed)
 
         self.remaining_pool1 = list(range(len(dataset1)))
@@ -487,7 +481,6 @@ def hetero_to_homogeneous(hetero_data: HeteroData) -> Data:
     x = hetero_data['cell'].x
     y = hetero_data['cell'].y
 
-    # Combine all edge types into a single edge_index
     edge_indices = []
     for edge_type in [('cell', 'line_constraint', 'cell'),
                       ('cell', 'region_constraint', 'cell'),
@@ -497,16 +490,13 @@ def hetero_to_homogeneous(hetero_data: HeteroData) -> Data:
             if edge_idx.numel() > 0:
                 edge_indices.append(edge_idx)
 
-    # Concatenate all edges
     if edge_indices:
         edge_index = torch.cat(edge_indices, dim=1)
     else:
         edge_index = torch.empty((2, 0), dtype=torch.long)
 
-    # Create homogeneous Data object
     data = Data(x=x, edge_index=edge_index, y=y)
 
-    # Preserve metadata
     if hasattr(hetero_data, 'n'):
         data.n = hetero_data.n
     if hasattr(hetero_data, 'step'):
@@ -591,7 +581,6 @@ def create_filtered_old_dataset_homogeneous(json_path, val_ratio, seed, split="t
         seed=seed
     )
 
-    # The underlying records are the same, just need to filter
     filtered_records = [
         record for record in full_dataset.records
         if record.get('iteration', 0) != 0
@@ -599,7 +588,6 @@ def create_filtered_old_dataset_homogeneous(json_path, val_ratio, seed, split="t
 
     print(f"Filtered old dataset (homogeneous): {len(full_dataset.records)} -> {len(filtered_records)} (removed iteration 0)")
 
-    # Create new dataset with filtered records
     filtered_dataset = HomogeneousQueensDataset.__new__(HomogeneousQueensDataset)
     filtered_dataset.__dict__.update(full_dataset.__dict__)
 

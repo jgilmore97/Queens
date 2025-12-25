@@ -41,7 +41,7 @@ class ModelConfig:
     t_micro: int = 2
     use_input_injection: bool = True
     z_dim: int = 256
-    use_hmod: bool = False
+    use_hmod: bool = False # When true make same size batches True as well
 
     input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])
 
@@ -66,8 +66,8 @@ class TrainingConfig:
     state0_json_path: str = "data/State0TrainingSet.json"
 
     # Batch sampler options
-    same_size_batches: bool = True  # Use size-based batching
-    drop_last: bool = True  # Drop last incomplete batch
+    same_size_batches: bool = False  # Use size-based batching
+    drop_last: bool = False  # Drop last incomplete batch
     
     # Legacy curriculum options (unused when combine_state0=True)
     state0_epochs: list = field(default_factory=lambda: [])
@@ -156,9 +156,9 @@ class Config:
 
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "No hmod, per cycle Z with same size batche. remove batch norm",
+        "experiment_name": "Test z per cycle with rmsnorm on non fixed batches",
         "tags": ["HRM", "cosine_annealing", "combined_data", "Z per_cycle"],
-        "notes": "Testing to see if old per z cycle approach is harmed by fixed batch sizes"
+        "notes": "Testing z per cycle with rmsnorm on non fixed batches"
     }
 }
 

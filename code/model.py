@@ -30,7 +30,6 @@ class GAT(nn.Module):
     def __init__(self, input_dim, hidden_dim, layer_count, dropout, heads=2):
         super().__init__()
 
-        # Each head outputs hidden_dim // heads channels; concatenated = hidden_dim
         head_dim = hidden_dim // heads
         assert hidden_dim % heads == 0, "hidden_dim must be divisible by heads"
 
@@ -99,7 +98,6 @@ class HeteroGAT(nn.Module):
         else:
             self.input_injection_layers = set(input_injection_layers)
 
-        # Mid-sequence global context helps catch constraint violations early
         self.mid_global_layer = max(1, layer_count // 3)
 
         print(f" HeteroGAT configured:")
@@ -277,8 +275,6 @@ class _FiLM(nn.Module):
         self.act = nn.GELU()
         self.fc2 = nn.Linear(2 * hidden_dim, 2 * hidden_dim)
 
-        # Identity-at-init without blocking gradients into fc1:
-        # initialize the final projection very small (not exactly zero).
         nn.init.normal_(self.fc2.weight, mean=0.0, std=1e-3)
         nn.init.zeros_(self.fc2.bias)
 
@@ -289,14 +285,12 @@ class _FiLM(nn.Module):
         d = nodes.shape[-1]
         assert d == self.hidden_dim, f"nodes last dim {d} != hidden_dim {self.hidden_dim}"
 
-        # Handle both [d] (shared z) and [B, d] (per-graph z) inputs
         if z_h.dim() == 1:
             z_h = z_h.unsqueeze(0).expand(B, -1)  # [d] -> [B, d]
 
         gb = self.fc2(self.act(self.fc1(z_h)))  # [B, 2d]
         gamma, beta = gb.chunk(2, dim=-1)  # each [B, d]
 
-        # Mildly bound modulation for stability.
         gamma = 0.1 * torch.tanh(gamma)
         beta = 0.1 * torch.tanh(beta)
 
@@ -320,7 +314,6 @@ class _LBlock(nn.Module):
         self.hidden_dim = hidden_dim
         self.drop = nn.Dropout(dropout)
         self.relu = nn.LeakyReLU(0.2)
-        self.use_bn = use_batch_norm
         self.use_input_injection = use_input_injection
 
         gat_head_dim = hidden_dim // max(1, gat_heads)
@@ -348,8 +341,8 @@ class _LBlock(nn.Module):
             ) for et in edge_types
         }, aggr='sum')
 
-        self.bn1 = nn.BatchNorm1d(hidden_dim) if self.use_bn else None
-        self.bn2 = nn.BatchNorm1d(hidden_dim) if self.use_bn else None
+        self.norm1 = _RMSNorm(hidden_dim)
+        self.norm2 = _RMSNorm(hidden_dim)
 
         self.hgt = HGTConv(
             in_channels=hidden_dim,
@@ -357,36 +350,33 @@ class _LBlock(nn.Module):
             metadata=(['cell'], edge_types),
             heads=hgt_heads
         )
-        self.bn_hgt = nn.BatchNorm1d(hidden_dim) if self.use_bn else None
+        self.norm_hgt = _RMSNorm(hidden_dim)
 
         if self.use_input_injection:
             self.input_proj = nn.Linear(hidden_dim, hidden_dim)
 
         self.film = _FiLM(hidden_dim)
 
-    def _res_block(self, x_old, x_new, bn):
-        if bn is not None:
-            x_new = bn(x_new)
+    def _res_block(self, x_old, x_new, norm):
+        x_new = norm(x_new)
         return self.relu(x_old + self.drop(x_new))
 
     def forward(self, x_cell, edge_index_dict, z_h, batch_size: int, x_cell_embedded=None):
         """
-        x_cell: [C, d] current node states
-        z_h: [d] global vector (fixed during this micro-step)
-        x_cell_embedded: [C, d] embedded original input for injection
+        x_cell: [N, d] current node states (N = total nodes in batch)
+        z_h: [d] or [B, d] global vector
+        x_cell_embedded: [N, d] embedded original input for injection
         """
         x_dict = {'cell': x_cell}
 
         x1 = self.hconv1(x_dict, edge_index_dict)['cell']
-        x1 = self._res_block(x_cell, x1, self.bn1)
+        x1 = self._res_block(x_cell, x1, self.norm1)
 
         x2 = self.hconv2({'cell': x1}, edge_index_dict)['cell']
-        x2 = self._res_block(x1, x2, self.bn2)
+        x2 = self._res_block(x1, x2, self.norm2)
 
         x3 = self.hgt({'cell': x2}, edge_index_dict)['cell']
-        if self.bn_hgt is not None:
-            x3 = self.bn_hgt(x3)
-        x3 = self._res_block(x2, x3, None)
+        x3 = self._res_block(x2, x3, self.norm_hgt)
 
         if self.use_input_injection and x_cell_embedded is not None:
             x3 = x3 + self.input_proj(x_cell_embedded)
@@ -434,7 +424,6 @@ class _HModule(nn.Module):
         # nodes: [B, C, d]
         nodes = nodes.view(B, C, d)
 
-        # Project
         # q: [B, d] -> [B, H, Dh]
         q = self.q(z_prev).view(B, H, Dh)
         # k,v: [B, C, d] -> [B, C, H, Dh] -> [B, H, C, Dh]
@@ -488,8 +477,7 @@ class _Readout(nn.Module):
         C = nodes.shape[0] // B
         d = nodes.shape[-1]
 
-        # Handle both [d] (shared z) and [B, d] (per-graph z) inputs
-        if z_h.dim() == 1:
+        if z_h.dim() == 1: # Handle both [d] (shared z) and [B, d] (per-graph z) inputs
             z_h = z_h.unsqueeze(0).expand(B, -1)  # [d] -> [B, d]
 
         nodes_ = nodes.view(B, C, d)              # [B, C, d]
@@ -549,7 +537,7 @@ class HRM(nn.Module):
             use_input_injection=use_input_injection,
         )
 
-        #bring hmod back - now c x d instead of d only
+        # Bring hmod back - now c x d instead of d only
         self.h_mod = _HModule(
             hidden_dim=hidden_dim,
             dropout=dropout,
@@ -559,11 +547,9 @@ class HRM(nn.Module):
         self.readout = _Readout(hidden_dim, dropout)
 
         if self.use_hmod:
-            # "new" path
             self.h_mod = _HModule(hidden_dim=hidden_dim, dropout=dropout, num_heads=hgt_heads)
             self.z0 = nn.Parameter(torch.zeros(hidden_dim))
         else:
-            # "old" path
             self.z_per_cycle = nn.ParameterList([
                 nn.Parameter(torch.randn(z_dim) * 0.02)
                 for _ in range(n_cycles)
@@ -581,12 +567,9 @@ class HRM(nn.Module):
         B = batch.num_graphs
 
         x_in = x_dict['cell']
-        C = x_in.shape[0]//B  # nodes per graph
+        C = x_in.shape[0]//B
         nodes_embedded = self.embed(x_in)
         nodes = nodes_embedded
-
-        # zh0 = torch.zeros(B, self.hidden_dim, device=x_in.device)
-        # z = zh0
 
         if return_intermediates:
             L_states = []
@@ -611,7 +594,7 @@ class HRM(nn.Module):
 
         else:
             for cycle_idx in range(self.n_cycles):
-                z = self.z_proj(self.z_per_cycle[cycle_idx])  # [d], not derived from nodes
+                z = self.z_proj(self.z_per_cycle[cycle_idx]) 
                 for micro_idx in range(self.t_micro):
                     nodes = self.l_block(
                         nodes,
