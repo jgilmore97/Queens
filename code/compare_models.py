@@ -163,17 +163,8 @@ def evaluate_single_step(model, model_name: str, is_heterogeneous: bool, device)
     print(f"  Top-3 Accuracy: {top3_acc:.1%}")
     return results
 
-def get_batch_indices_hetero(batch, device):
-    if hasattr(batch, 'batch_dict') and 'cell' in batch.batch_dict:
-        return batch.batch_dict['cell']
-    elif hasattr(batch, '_slice_dict') and 'cell' in batch._slice_dict:
-        slices = batch._slice_dict['cell']['x']
-        batch_indices = torch.zeros(len(batch['cell'].y), dtype=torch.long, device=device)
-        for i in range(len(slices) - 1):
-            batch_indices[slices[i]:slices[i+1]] = i
-        return batch_indices
-    else:
-        return torch.zeros(len(batch['cell'].y), dtype=torch.long, device=device)
+def get_batch_indices_hetero(batch):
+    return batch['cell'].batch
 
 def evaluate_full_solve_wrapper(checkpoint_path: str, data_path: str, device) -> Dict[str, Any]:
     print(f"\nLoading solver from {checkpoint_path}...")

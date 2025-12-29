@@ -2,18 +2,16 @@ import argparse
 import json
 import optuna
 from optuna.samplers import TPESampler
-from optuna.pruners import NopPruner
+from optuna.pruners import MedianPruner
 from pathlib import Path
 from datetime import datetime
 from functools import partial
-
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sweep.objective import objective
 
 
 def save_results(study: optuna.Study, output_path: str):
+    """Save all trial results to JSON."""
     results = []
 
     for trial in study.trials:
@@ -21,9 +19,7 @@ def save_results(study: optuna.Study, output_path: str):
             'trial_id': trial.number,
             'state': trial.state.name,
             'value': trial.value,
-            # Hyperparameters
             **trial.params,
-            # User attributes (solve rates, status)
             **trial.user_attrs,
         }
         results.append(result)
@@ -35,6 +31,7 @@ def save_results(study: optuna.Study, output_path: str):
 
 
 def print_summary(study: optuna.Study):
+    """Print sweep summary statistics."""
     completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
     pruned = [t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]
     failed = [t for t in study.trials if t.state == optuna.trial.TrialState.FAIL]
@@ -53,9 +50,11 @@ def print_summary(study: optuna.Study):
         print(f"  Solve rate: {best_trial.value:.4f}")
         print(f"  Parameters:")
         for key, value in best_trial.params.items():
-            print(f"    {key}: {value}")
+            if isinstance(value, float):
+                print(f"    {key}: {value:.6g}")
+            else:
+                print(f"    {key}: {value}")
 
-        # Top 5 trials
         sorted_trials = sorted(completed, key=lambda t: t.value or 0, reverse=True)
         print(f"\nTop 5 trials:")
         for i, trial in enumerate(sorted_trials[:5], 1):
@@ -64,22 +63,15 @@ def print_summary(study: optuna.Study):
 
 def main():
     parser = argparse.ArgumentParser(description="HRM Hyperparameter Sweep")
-    parser.add_argument('--n_trials', type=int, default=60,
-                        help='Number of trials to run')
-    parser.add_argument('--device', type=str, default='cuda',
-                        choices=['cuda', 'cpu'], help='Device to use')
-    parser.add_argument('--train_json', type=str, default='data/StateTrainingSet.json',
-                        help='Path to training data')
-    parser.add_argument('--state0_json', type=str, default='data/State0TrainingSet.json',
-                        help='Path to state-0 training data')
-    parser.add_argument('--val_json', type=str, default='data/StateValSet.json',
-                        help='Path to validation data')
-    parser.add_argument('--output', type=str, default=None,
-                        help='Output JSON path (default: sweep_results_<timestamp>.json)')
-    parser.add_argument('--seed', type=int, default=42,
-                        help='Random seed')
-    parser.add_argument('--study_name', type=str, default='hrm_sweep',
-                        help='Optuna study name')
+    parser.add_argument('--n_trials', type=int, default=60)
+    parser.add_argument('--device', type=str, default='cuda', choices=['cuda', 'cpu'])
+    parser.add_argument('--train_json', type=str, default='data/StateTrainingSet.json')
+    parser.add_argument('--state0_json', type=str, default='data/State0TrainingSet.json')
+    parser.add_argument('--val_json', type=str, default='data/StateValSet.json')
+    parser.add_argument('--output', type=str, default=None)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--study_name', type=str, default='hrm_sweep')
+    parser.add_argument('--prune', action='store_true', help='Enable median pruning')
     args = parser.parse_args()
 
     if args.output is None:
@@ -92,13 +84,11 @@ def main():
     print(f"Trials: {args.n_trials}")
     print(f"Device: {args.device}")
     print(f"Output: {args.output}")
-    print(f"Train data: {args.train_json}")
-    print(f"State-0 data: {args.state0_json}")
-    print(f"Val data: {args.val_json}")
+    print(f"Pruning: {'enabled' if args.prune else 'disabled'}")
     print("=" * 60)
 
     sampler = TPESampler(seed=args.seed)
-    pruner = NopPruner() # No pruning for now - compromised result generalizability
+    pruner = MedianPruner(n_startup_trials=5, n_warmup_steps=3) if args.prune else optuna.pruners.NopPruner()
 
     study = optuna.create_study(
         study_name=args.study_name,
@@ -124,10 +114,8 @@ def main():
     )
 
     save_results(study, args.output)
-
     print_summary(study)
 
-    # Save best params 
     if study.best_trial:
         best_params_path = args.output.replace('.json', '_best_params.json')
         with open(best_params_path, 'w') as f:

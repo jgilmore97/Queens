@@ -72,15 +72,7 @@ def calculate_top1_metrics_hetero(logits, labels, batch_info):
     """Calculate top-1 metrics for heterogeneous graph data."""
     device = logits.device
 
-    if hasattr(batch_info, 'batch_dict') and 'cell' in batch_info.batch_dict:
-        batch_indices = batch_info.batch_dict['cell']
-    elif hasattr(batch_info, '_slice_dict') and 'cell' in batch_info._slice_dict:
-        slices = batch_info._slice_dict['cell']['x']
-        batch_indices = torch.zeros(len(logits), dtype=torch.long, device=device)
-        for i in range(len(slices) - 1):
-            batch_indices[slices[i]:slices[i+1]] = i
-    else:
-        batch_indices = torch.zeros(len(logits), dtype=torch.long, device=device)
+    batch_indices = batch_info['cell'].batch
 
     unique_batches, inverse_indices = torch.unique(batch_indices, return_inverse=True)
     num_graphs = len(unique_batches)
@@ -223,20 +215,20 @@ def train_epoch_hetero(model, loader, criterion, optimizer, device, epoch):
         batch = batch.to(device)
         optimizer.zero_grad()
 
-        if hasattr(batch, 'x_dict'):
-            logits = model(batch.x_dict, batch.edge_index_dict)
-            labels = batch.y_dict['cell']
-            num_nodes = batch['cell'].num_nodes
-        else:
-            x_dict = {'cell': batch['cell'].x}
-            edge_index_dict = {
-                ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
-                ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
-                ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
-            }
-            logits = model(x_dict, edge_index_dict)
-            labels = batch['cell'].y
-            num_nodes = len(labels)
+        # if hasattr(batch, 'x_dict'):
+        logits = model(batch)
+        labels = batch['cell'].y
+        num_nodes = batch['cell'].num_nodes
+        # else:
+        #     x_dict = {'cell': batch['cell'].x}
+        #     edge_index_dict = {
+        #         ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
+        #         ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
+        #         ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
+        #     }
+        #     logits = model(x_dict, edge_index_dict)
+        #     labels = batch['cell'].y
+        #     num_nodes = len(labels)
 
         loss = criterion(logits, labels.float())
 
@@ -423,8 +415,8 @@ def evaluate_epoch_hetero(model, loader, criterion, device, epoch):
         batch = batch.to(device)
 
         if hasattr(batch, 'x_dict'):
-            logits = model(batch.x_dict, batch.edge_index_dict)
-            labels = batch.y_dict['cell']
+            logits = model(batch)
+            labels = batch['cell'].y
             num_nodes = batch['cell'].num_nodes
         else:
             x_dict = {'cell': batch['cell'].x}
@@ -731,6 +723,10 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
         best_solve_rate = 0.0
         best_epoch = 0
         best_top1_epoch = 0
+        is_best_solve_rate = False
+        best_solve_rate = 0.0
+        is_best = False
+
 
         print(f"Starting HETEROGENEOUS training for {config.training.epochs} epochs")
         print(f"Device: {device}")
@@ -769,7 +765,6 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
                 device=device
             )
 
-            # Track best metrics
             is_best_f1 = val_metrics['f1'] > best_val_f1
             is_best_top1 = val_metrics['top1_accuracy'] > best_val_top1
 
@@ -781,23 +776,28 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
                 best_val_top1 = val_metrics['top1_accuracy']
                 best_top1_epoch = epoch
 
-            # Evaluate full solve rate
             solve_stats = evaluate_solve_rate(model, config.data.auto_reg_json, device)
             solve_rate = solve_stats['solve_rate']
-            is_best_solve_rate = solve_rate > best_solve_rate
-            if is_best_solve_rate:
-                best_solve_rate = solve_rate
 
-            # Step scheduler
+            F1_CONVERGENCE_THRESHOLD = 0.9935
+            converged = val_metrics['f1'] >= F1_CONVERGENCE_THRESHOLD
+
+            if converged:
+                is_best_solve_rate = solve_rate > best_solve_rate
+                is_best = is_best_solve_rate
+                if is_best:
+                    best_solve_rate = solve_rate
+            # else:
+            #     is_best = is_best_f1
+
             if scheduler is not None:
                 if isinstance(scheduler, ReduceLROnPlateau):
                     scheduler.step(solve_rate)
                 else:
                     scheduler.step()
 
-            tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_solve_rate)
+            tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best)
 
-            # Logging
             base_log = (f"Epoch {epoch:02d} | "
                        f"Train: L={train_metrics['loss']:.4f} Acc={train_metrics['accuracy']:.3f} "
                        f"F1={train_metrics['f1']:.3f} T1={train_metrics['top1_accuracy']:.3f} | "
