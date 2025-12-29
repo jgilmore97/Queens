@@ -25,13 +25,13 @@ def _detect_notebook_environment():
 class ModelConfig:
     """Model architecture configuration."""
     input_dim: int = 14
-    hidden_dim: int = 128
+    hidden_dim: int = 160
     layer_count: int = 6
-    dropout: float = 0.1
+    dropout: float = 0.12
     use_batch_norm: bool = False
 
     gat_heads: int = 2
-    hgt_heads: int = 4
+    hgt_heads: int = 8
 
     model_type: str = "HRM"  # "GAT", "HeteroGAT", or "HRM"
     hetero_aggr: str = "sum"
@@ -40,7 +40,7 @@ class ModelConfig:
     n_cycles: int = 3
     t_micro: int = 2
     use_input_injection: bool = True
-    z_dim: int = 256
+    z_dim: int = 128
     use_hmod: bool = False # When true make same size batches True as well
 
     input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])
@@ -57,8 +57,8 @@ class TrainingConfig:
     """Training hyperparameters."""
     epochs: int = 18
     batch_size: int = 512
-    learning_rate: float = 1e-3
-    weight_decay: float = 1e-5
+    learning_rate: float = 0.0015
+    weight_decay: float = 3e-6
     val_ratio: float = 0.10
 
     # Dataset combination
@@ -66,7 +66,7 @@ class TrainingConfig:
     state0_json_path: str = "data/State0TrainingSet.json"
 
     # Batch sampler options
-    same_size_batches: bool = False  # Use size-based batching
+    same_size_batches: bool = False 
     drop_last: bool = False  # Drop last incomplete batch
     
     # Legacy curriculum options (unused when combine_state0=True)
@@ -75,8 +75,8 @@ class TrainingConfig:
     lr_reduce_factor: float = 0.5
     mixed_ratio: float = 0.75
 
-    focal_alpha: float = 0.3
-    focal_gamma: float = 2.0
+    focal_alpha: float = 0.37
+    focal_gamma: float = 2.2
 
     # Scheduler
     scheduler_type: str = "cosine"  # "cosine", "plateau", "step", "none"
@@ -156,9 +156,9 @@ class Config:
 
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "Test z per cycle with rmsnorm on non fixed batches",
+        "experiment_name": "Post Sweep Baseline",
         "tags": ["HRM", "cosine_annealing", "combined_data", "Z per_cycle"],
-        "notes": "Testing z per cycle with rmsnorm on non fixed batches"
+        "notes": "Testing with best param config from sweep"
     }
 }
 

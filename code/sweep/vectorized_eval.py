@@ -1,18 +1,28 @@
 import torch
 import numpy as np
-from typing import Dict, Tuple
-from torch_geometric.loader import DataLoader
-from torch_geometric.data import Batch, HeteroData
+from typing import Dict, List, Tuple
+from dataclasses import dataclass
+from torch_geometric.data import Batch
 from pathlib import Path
-
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from data_loader import QueensDataset
 
 
+@dataclass
+class FailedPuzzle:
+    """Record of a puzzle that failed during evaluation."""
+    dataset_idx: int
+    source: str
+    board_size: int
+    first_error_step: int
+    region: np.ndarray
+    label_board: np.ndarray
+    predicted_positions: List[Tuple[int, int]]
+    correct_positions: List[Tuple[int, int]]
+
+
 class Step0Dataset(QueensDataset):
-    """Dataset filtered to only step-0 (empty board) puzzles."""
+    """Dataset filtered to step-0 (empty board) puzzles only."""
 
     def __init__(self, json_path: str, val_ratio: float = 0.1, seed: int = 42):
         super().__init__(
@@ -25,71 +35,10 @@ class Step0Dataset(QueensDataset):
         print(f"Step0Dataset: {len(self.records)} step-0 puzzles")
 
 
-def evaluate_solve_rate(
-    model: torch.nn.Module,
-    val_json_path: str,
-    device: str,
-    batch_size: int = 128,
-    val_ratio: float = 0.1,
-    seed: int = 42,
-) -> Dict[str, float]:
-    """
-    Evaluate model's full-puzzle solve rate using batched autoregressive inference.
-    Groups puzzles by size to handle variable board dimensions.
-    """
-    model.eval()
-
-    dataset = Step0Dataset(val_json_path, val_ratio=val_ratio, seed=seed)
-
-    # Group puzzles by size (required for batching since H-module needs uniform C per batch)
-    size_groups = {}
-    for idx in range(len(dataset)):
-        record = dataset.records[idx]
-        n = len(record['region'])
-        if n not in size_groups:
-            size_groups[n] = []
-        size_groups[n].append(idx)
-
-    print(f"Puzzle sizes: {{{', '.join(f'{n}x{n}: {len(idxs)}' for n, idxs in sorted(size_groups.items()))}}}")
-
-    total_puzzles = 0
-    solved_puzzles = 0
-    error_by_step = {}
-
-    with torch.no_grad():
-        for n, indices in size_groups.items():
-            subset_records = [dataset.records[i] for i in indices]
-
-            for batch_start in range(0, len(subset_records), batch_size):
-                batch_end = min(batch_start + batch_size, len(subset_records))
-                batch_records = subset_records[batch_start:batch_end]
-
-                batch_data = [dataset.get(indices[batch_start + i]) for i in range(len(batch_records))]
-                batch = Batch.from_data_list(batch_data)
-                batch = batch.to(device)
-
-                batch_solved, batch_total, batch_errors = _evaluate_batch(model, batch, device, n)
-
-                solved_puzzles += batch_solved
-                total_puzzles += batch_total
-
-                for step, count in batch_errors.items():
-                    error_by_step[step] = error_by_step.get(step, 0) + count
-
-    solve_rate = solved_puzzles / total_puzzles if total_puzzles > 0 else 0.0
-
-    return {
-        'solve_rate': solve_rate,
-        'total_puzzles': total_puzzles,
-        'solved_puzzles': solved_puzzles,
-        'error_by_step': error_by_step
-    }
-
-
 class _MutableBatch:
     """
-    Wrapper that presents a mutable view of batch data for autoregressive inference.
-    Allows modifying node features while preserving the batch interface expected by HRM.
+    Wrapper providing mutable view of batch data for autoregressive inference.
+    Presents the interface expected by HRM.forward().
     """
     def __init__(self, batch, x_cell: torch.Tensor):
         self._batch = batch
@@ -111,32 +60,104 @@ class _MutableBatch:
     def num_graphs(self) -> int:
         return self._batch.num_graphs
 
+    def __getitem__(self, key):
+        """Allow indexing for edge access."""
+        return self._batch[key]
+
     def update_x(self, x_cell: torch.Tensor):
         """Update node features for next autoregressive step."""
         self._x_cell = x_cell
+
+
+def evaluate_solve_rate(
+    model: torch.nn.Module,
+    val_json_path: str,
+    device: str,
+    batch_size: int = 128,
+    val_ratio: float = 0.1,
+    seed: int = 42,
+) -> Dict:
+    """
+    Evaluate full-puzzle solve rate using batched autoregressive inference.
+    Groups puzzles by size for efficient batching.
+    
+    Returns dict with solve_rate, counts, error distribution, and list of failed puzzles.
+    """
+    model.eval()
+
+    dataset = Step0Dataset(val_json_path, val_ratio=val_ratio, seed=seed)
+
+    size_groups = {}
+    for idx in range(len(dataset)):
+        record = dataset.records[idx]
+        n = len(record['region'])
+        if n not in size_groups:
+            size_groups[n] = []
+        size_groups[n].append(idx)
+
+    print(f"Puzzle sizes: {{{', '.join(f'{n}x{n}: {len(idxs)}' for n, idxs in sorted(size_groups.items()))}}}")
+
+    total_puzzles = 0
+    solved_puzzles = 0
+    error_by_step = {}
+    failed_puzzles: List[FailedPuzzle] = []
+
+    with torch.no_grad():
+        for n, indices in size_groups.items():
+            for batch_start in range(0, len(indices), batch_size):
+                batch_end = min(batch_start + batch_size, len(indices))
+                batch_indices = indices[batch_start:batch_end]
+
+                batch_data = [dataset.get(idx) for idx in batch_indices]
+                batch = Batch.from_data_list(batch_data)
+                batch = batch.to(device)
+
+                batch_solved, batch_total, batch_errors, batch_failures = _evaluate_batch(
+                    model, batch, device, n, dataset, batch_indices
+                )
+
+                solved_puzzles += batch_solved
+                total_puzzles += batch_total
+                failed_puzzles.extend(batch_failures)
+
+                for step, count in batch_errors.items():
+                    error_by_step[step] = error_by_step.get(step, 0) + count
+
+    solve_rate = solved_puzzles / total_puzzles if total_puzzles > 0 else 0.0
+
+    return {
+        'solve_rate': solve_rate,
+        'total_puzzles': total_puzzles,
+        'solved_puzzles': solved_puzzles,
+        'error_by_step': error_by_step,
+        'failed_puzzles': failed_puzzles
+    }
 
 
 def _evaluate_batch(
     model: torch.nn.Module,
     batch,
     device: str,
-    n: int
-) -> Tuple[int, int, Dict[int, int]]:
+    n: int,
+    dataset: Step0Dataset,
+    dataset_indices: List[int]
+) -> Tuple[int, int, Dict[int, int], List[FailedPuzzle]]:
     """
-    Evaluate a single batch of puzzles autoregressively.
-    All puzzles in batch must have the same size n.
+    Evaluate a batch of same-sized puzzles autoregressively.
+    Returns (solved_count, total_count, error_by_step, failed_puzzles).
     """
     x = batch['cell'].x.clone()
     y = batch['cell'].y
     batch_indices = batch['cell'].batch
     num_graphs = batch.num_graphs
 
-    # Create mutable batch wrapper for autoregressive updates
     mutable_batch = _MutableBatch(batch, x)
 
     still_correct = torch.ones(num_graphs, dtype=torch.bool, device=device)
     first_error_step = torch.full((num_graphs,), -1, dtype=torch.long, device=device)
     placed = torch.zeros_like(y, dtype=torch.bool)
+
+    all_predicted_positions = [[] for _ in range(num_graphs)]
 
     for step in range(n):
         logits = model(mutable_batch)
@@ -146,6 +167,13 @@ def _evaluate_batch(
 
         selected_nodes = _batched_argmax(masked_logits, batch_indices, num_graphs)
 
+        # Convert selected nodes to (row, col) positions
+        nodes_per_graph = n * n
+        for graph_idx in range(num_graphs):
+            local_node = selected_nodes[graph_idx].item() - graph_idx * nodes_per_graph
+            row, col = local_node // n, local_node % n
+            all_predicted_positions[graph_idx].append((row, col))
+
         selected_labels = y[selected_nodes]
         is_correct = (selected_labels == 1)
 
@@ -153,13 +181,11 @@ def _evaluate_batch(
         first_error_step[just_failed] = step
         still_correct = still_correct & is_correct
 
-        # Update state for next step
         placed[selected_nodes] = True
         x[selected_nodes, -1] = 1.0
         mutable_batch.update_x(x)
 
     solved_count = still_correct.sum().item()
-    total_count = num_graphs
 
     error_by_step = {}
     for step in range(n):
@@ -167,7 +193,30 @@ def _evaluate_batch(
         if count > 0:
             error_by_step[step] = count
 
-    return solved_count, total_count, error_by_step
+    failed_puzzles = []
+    failed_mask = ~still_correct
+    failed_indices = torch.where(failed_mask)[0].cpu().tolist()
+
+    for local_idx in failed_indices:
+        dataset_idx = dataset_indices[local_idx]
+        record = dataset.records[dataset_idx]
+
+        region = np.array(record['region'])
+        label_board = np.array(record['label_board'])
+        correct_positions = [(r, c) for r in range(n) for c in range(n) if label_board[r, c] == 1]
+
+        failed_puzzles.append(FailedPuzzle(
+            dataset_idx=dataset_idx,
+            source=record.get('source', f'puzzle_{dataset_idx}'),
+            board_size=n,
+            first_error_step=first_error_step[local_idx].item(),
+            region=region,
+            label_board=label_board,
+            predicted_positions=all_predicted_positions[local_idx],
+            correct_positions=correct_positions
+        ))
+
+    return solved_count, num_graphs, error_by_step, failed_puzzles
 
 
 def _batched_argmax(
@@ -176,8 +225,8 @@ def _batched_argmax(
     num_graphs: int
 ) -> torch.Tensor:
     """
-    Compute argmax of logits within each graph.
-    Returns [num_graphs] tensor of selected node indices (global indices into logits).
+    Compute per-graph argmax of logits.
+    Returns tensor of global node indices (one per graph).
     """
     device = logits.device
 
@@ -186,7 +235,6 @@ def _batched_argmax(
 
     logits_matrix = torch.full((num_graphs, max_nodes), float('-inf'), device=device)
 
-    # Compute position within each graph (vectorized)
     graph_offsets = torch.zeros(num_graphs + 1, dtype=torch.long, device=device)
     graph_offsets[1:] = nodes_per_graph.cumsum(0)
     position_in_graph = torch.arange(len(batch_indices), device=device) - graph_offsets[batch_indices]
@@ -194,8 +242,6 @@ def _batched_argmax(
     logits_matrix[batch_indices, position_in_graph] = logits
 
     local_argmax = logits_matrix.argmax(dim=1)
-
-    graph_starts = graph_offsets[:-1]
-    global_argmax = graph_starts + local_argmax
+    global_argmax = graph_offsets[:-1] + local_argmax
 
     return global_argmax

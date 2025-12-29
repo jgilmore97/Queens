@@ -723,6 +723,10 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
         best_solve_rate = 0.0
         best_epoch = 0
         best_top1_epoch = 0
+        is_best_solve_rate = False
+        best_solve_rate = 0.0
+        is_best = False
+
 
         print(f"Starting HETEROGENEOUS training for {config.training.epochs} epochs")
         print(f"Device: {device}")
@@ -761,7 +765,6 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
                 device=device
             )
 
-            # Track best metrics
             is_best_f1 = val_metrics['f1'] > best_val_f1
             is_best_top1 = val_metrics['top1_accuracy'] > best_val_top1
 
@@ -773,23 +776,28 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
                 best_val_top1 = val_metrics['top1_accuracy']
                 best_top1_epoch = epoch
 
-            # Evaluate full solve rate
             solve_stats = evaluate_solve_rate(model, config.data.auto_reg_json, device)
             solve_rate = solve_stats['solve_rate']
-            is_best_solve_rate = solve_rate > best_solve_rate
-            if is_best_solve_rate:
-                best_solve_rate = solve_rate
 
-            # Step scheduler
+            F1_CONVERGENCE_THRESHOLD = 0.9935
+            converged = val_metrics['f1'] >= F1_CONVERGENCE_THRESHOLD
+
+            if converged:
+                is_best_solve_rate = solve_rate > best_solve_rate
+                is_best = is_best_solve_rate
+                if is_best:
+                    best_solve_rate = solve_rate
+            # else:
+            #     is_best = is_best_f1
+
             if scheduler is not None:
                 if isinstance(scheduler, ReduceLROnPlateau):
                     scheduler.step(solve_rate)
                 else:
                     scheduler.step()
 
-            tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_solve_rate)
+            tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best)
 
-            # Logging
             base_log = (f"Epoch {epoch:02d} | "
                        f"Train: L={train_metrics['loss']:.4f} Acc={train_metrics['accuracy']:.3f} "
                        f"F1={train_metrics['f1']:.3f} T1={train_metrics['top1_accuracy']:.3f} | "

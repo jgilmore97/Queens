@@ -36,11 +36,13 @@ class Solver:
                 gat_heads=model_config.get('gat_heads', 2),
                 hgt_heads=model_config.get('hgt_heads', 4),
                 dropout=model_config.get('dropout', 0.2),
-                use_batch_norm=True,
+                use_batch_norm=model_config.get('use_batch_norm', False),
                 n_cycles=model_config.get('n_cycles', 3),
                 t_micro=model_config.get('t_micro', 2),
                 use_input_injection=model_config.get('use_input_injection', True),
-                z_dim=model_config.get('z_dim', 256),
+                z_dim=model_config.get('z_dim', 128),
+                use_hmod=model_config.get('use_hmod', False),
+                same_size_batches=model_config.get('same_size_batches', False)
             )
             print(f"Loaded HRM solver (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)})")
             is_heterogeneous = True

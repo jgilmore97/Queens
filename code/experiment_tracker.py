@@ -269,6 +269,9 @@ class ExperimentTracker:
                 "n_cycles": getattr(self.config.model, 'n_cycles', 2),
                 "t_micro": getattr(self.config.model, 't_micro', 2),
                 "use_input_injection": getattr(self.config.model, 'use_input_injection', True),
+                "z_dim": getattr(self.config.model, 'z_dim', 128),
+                "use_hmod": getattr(self.config.model, 'use_hmod', False),
+                "same_size_batches": getattr(self.config.training, 'same_size_batches', False)
             }
         }
 

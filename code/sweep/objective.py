@@ -2,14 +2,21 @@ import random
 import numpy as np
 import torch
 from torch import nn, optim
-import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
 from tqdm.auto import tqdm
 import optuna
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from pathlib import Path
 import traceback
+
+from model import HRM
+from data_loader import (
+    QueensDataset,
+    get_combined_queens_loaders,
+    SizeBucketBatchSampler,
+)
 from train import FocalLoss
+from sweep.vectorized_eval import evaluate_solve_rate
 
 
 def set_seed(seed: int = 42) -> None:
@@ -23,27 +30,20 @@ def set_seed(seed: int = 42) -> None:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from model import HRM
-from data_loader import (
-    QueensDataset,
-    MixedDataset,
-    create_filtered_old_dataset
-)
-from sweep.vectorized_eval import evaluate_solve_rate
-
 
 def get_project_root() -> Path:
     return Path(__file__).parent.parent.parent
 
+
 def create_model_from_trial(trial: optuna.Trial) -> HRM:
-    hidden_dim = trial.suggest_categorical('hidden_dim', [64, 128, 160, 192])
+    """Create HRM with hyperparameters sampled from trial."""
+    hidden_dim = trial.suggest_categorical('hidden_dim', [64, 128, 160])
     gat_heads = trial.suggest_categorical('gat_heads', [2, 4])
     hgt_heads = trial.suggest_categorical('hgt_heads', [4, 8])
-    dropout = trial.suggest_float('dropout', 0.1, 0.3)
-    z_dim = trial.suggest_categorical('z_dim', [128, 256])
+    dropout = trial.suggest_float('dropout', 0.08, 0.3)
+    z_dim = trial.suggest_categorical('z_dim', [64, 128, 256])
+    n_cycles = 2
+    t_micro = trial.suggest_categorical('t_micro', [2, 3])
 
     model = HRM(
         input_dim=14,
@@ -51,14 +51,17 @@ def create_model_from_trial(trial: optuna.Trial) -> HRM:
         gat_heads=gat_heads,
         hgt_heads=hgt_heads,
         dropout=dropout,
-        use_batch_norm=True,
-        n_cycles=3,
-        t_micro=2,
+        use_batch_norm=False,
+        n_cycles=n_cycles,
+        t_micro=t_micro,
         use_input_injection=True,
         z_dim=z_dim,
+        use_hmod=False,
+        same_size_batches=False,
     )
 
     return model
+
 
 def train_epoch_simple(
     model: nn.Module,
@@ -68,7 +71,7 @@ def train_epoch_simple(
     device: str,
     epoch: int
 ) -> Dict[str, float]:
-    """Simplified training epoch for sweep (no W&B, minimal logging)."""
+    """Simplified training epoch for sweep."""
     model.train()
     total_loss = 0.0
     total_nodes = 0
@@ -79,21 +82,14 @@ def train_epoch_simple(
         batch = batch.to(device)
         optimizer.zero_grad()
 
-        x_dict = {'cell': batch['cell'].x}
-        edge_index_dict = {
-            ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
-            ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
-            ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
-        }
+        logits = model(batch)
         labels = batch['cell'].y
 
-        logits = model(x_dict, edge_index_dict)
         loss = criterion(logits, labels.float())
-
         loss.backward()
         optimizer.step()
 
-        num_nodes = len(labels)
+        num_nodes = batch['cell'].num_nodes
         total_loss += loss.item() * num_nodes
         total_nodes += num_nodes
 
@@ -104,32 +100,35 @@ def train_epoch_simple(
 
 def objective(
     trial: optuna.Trial,
-    train_json: str = "data/StateTrainingSet.json",
-    state0_json: str = "data/State0TrainingSet.json",
-    val_json: str = "data/StateValSet.json",
+    train_json: str = "/data/StateTrainingSet.json",
+    state0_json: str = "/data/State0TrainingSet.json",
+    val_json: str = "/data/StateValSet.json",
     device: str = "cuda",
     val_ratio: float = 0.1,
     seed: int = 42,
 ) -> float:
     """
     Optuna objective function.
-    Trains HRM for 6 epochs (2 pre-switch + 4 post-switch).
+    Trains HRM using combined dataset for specified epochs.
+    Returns solve rate on validation set.
     """
-    # Set seeds for reproducibility at the start of each trial
     set_seed(seed)
 
-    # Resolve paths relative to project root
     root = get_project_root()
     train_json = str(root / train_json)
     state0_json = str(root / state0_json)
     val_json = str(root / val_json)
 
     # Sample training hyperparameters
-    learning_rate = trial.suggest_float('learning_rate', 3e-4, 3e-3, log=True)
+    learning_rate = trial.suggest_float('learning_rate', 1e-4, 3e-3, log=True)
     weight_decay = trial.suggest_float('weight_decay', 1e-6, 1e-4, log=True)
-    focal_alpha = trial.suggest_float('focal_alpha', 0.15, 0.5)
+    focal_alpha = trial.suggest_float('focal_alpha', 0.15, 0.40)
     focal_gamma = trial.suggest_float('focal_gamma', 1.5, 3.0)
-    mixed_ratio = trial.suggest_float('mixed_ratio', 0.5, 0.7)
+    batch_size = 512
+
+    num_epochs = 4
+
+    epoch2_solve_rate = None
 
     try:
         model = create_model_from_trial(trial)
@@ -145,116 +144,76 @@ def objective(
         )
         criterion = FocalLoss(alpha=focal_alpha, gamma=focal_gamma)
 
-        # Pre-switch training 
-        train_dataset = QueensDataset(
+        train_loader, val_loader = get_combined_queens_loaders(
             train_json,
-            split="train",
+            state0_json,
+            batch_size=batch_size,
             val_ratio=val_ratio,
-            seed=seed
-        )
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=512,
-            shuffle=True,
+            seed=seed,
             num_workers=4,
-            pin_memory=True
+            pin_memory=True,
+            shuffle_train=True,
+            same_size_batches=False,
+            drop_last=False,
         )
 
-        for epoch in range(1, 3):
+        for epoch in range(1, num_epochs + 1):
             metrics = train_epoch_simple(model, train_loader, criterion, optimizer, device, epoch)
             print(f"  Epoch {epoch}: loss={metrics['loss']:.4f}")
 
+            # Early checkpoint for pruning
+            # if epoch == 4:
+            #     eval_results = evaluate_solve_rate(
+            #         model,
+            #         val_json_path=val_json,
+            #         device=device,
+            #         batch_size=128,
+            #         val_ratio=val_ratio,
+            #         seed=seed,
+            #     )
+            #     epoch2_solve_rate = eval_results['solve_rate']
+            #     print(f"  Epoch 4 solve_rate: {epoch2_solve_rate:.4f}")
+
+            #     trial.report(epoch2_solve_rate, step=4)
+            #     if trial.should_prune():
+            #         print(f"  Trial {trial.number} pruned at epoch 4")
+            #         raise optuna.TrialPruned()
+
         eval_results = evaluate_solve_rate(
             model,
             val_json_path=val_json,
             device=device,
             batch_size=128,
-            val_ratio=val_ratio,
-            seed=seed
-        )
-
-        epoch2_solve_rate = eval_results['solve_rate']
-        print(f"  Epoch 2 solve_rate: {epoch2_solve_rate:.4f}")
-
-        trial.report(epoch2_solve_rate, step=2)
-        if trial.should_prune():
-            print(f"  Trial {trial.number} pruned at epoch 2")
-            raise optuna.TrialPruned()
-
-        # Post-switch training
-        # Halve learning rate
-        for param_group in optimizer.param_groups:
-            param_group['lr'] /= 2
-
-        state0_dataset = QueensDataset(
-            state0_json,
-            split="train",
-            val_ratio=val_ratio,
-            seed=seed
-        )
-        filtered_old_dataset = create_filtered_old_dataset(
-            train_json,
             val_ratio=val_ratio,
             seed=seed,
-            split="train"
         )
-        mixed_dataset = MixedDataset(
-            state0_dataset,
-            filtered_old_dataset,
-            ratio1=mixed_ratio,
-            seed=seed
-        )
-        mixed_loader = DataLoader(
-            mixed_dataset,
-            batch_size=256,
-            shuffle=True,
-            num_workers=4,
-            pin_memory=True
-        )
+        final_solve_rate = eval_results['solve_rate']
+        print(f"  Final solve_rate: {final_solve_rate:.4f}")
 
-        for epoch in range(3, 7):
-            metrics = train_epoch_simple(model, mixed_loader, criterion, optimizer, device, epoch)
-            print(f"  Epoch {epoch}: loss={metrics['loss']:.4f}")
-
-        eval_results = evaluate_solve_rate(
-            model,
-            val_json_path=val_json,
-            device=device,
-            batch_size=128,
-            val_ratio=val_ratio,
-            seed=seed
-        )
-        epoch6_solve_rate = eval_results['solve_rate']
-        print(f"  Epoch 6 solve_rate: {epoch6_solve_rate:.4f}")
-
-        trial.set_user_attr('epoch2_solve_rate', epoch2_solve_rate)
-        trial.set_user_attr('epoch6_solve_rate', epoch6_solve_rate)
+        # trial.set_user_attr('epoch4_solve_rate', epoch2_solve_rate)
+        trial.set_user_attr('final_solve_rate', final_solve_rate)
+        trial.set_user_attr('param_count', param_count)
         trial.set_user_attr('status', 'completed')
 
-        return epoch6_solve_rate
+        return final_solve_rate
 
     except optuna.TrialPruned:
-        trial.set_user_attr('epoch2_solve_rate', epoch2_solve_rate)
-        trial.set_user_attr('epoch6_solve_rate', None)
+        trial.set_user_attr('epoch4_solve_rate', epoch2_solve_rate)
+        trial.set_user_attr('final_solve_rate', None)
         trial.set_user_attr('status', 'pruned')
         raise
 
     except RuntimeError as e:
         if "out of memory" in str(e).lower():
-            print(f"  Trial {trial.number} OOM - marking as failed")
+            print(f"  Trial {trial.number} OOM")
             torch.cuda.empty_cache()
-            trial.set_user_attr('epoch2_solve_rate', None)
-            trial.set_user_attr('epoch6_solve_rate', None)
             trial.set_user_attr('status', 'oom')
             return 0.0
-        else:
-            raise
+        raise
 
     except Exception as e:
         print(f"  Trial {trial.number} failed: {e}")
         traceback.print_exc()
-        trial.set_user_attr('epoch2_solve_rate', None)
-        trial.set_user_attr('epoch6_solve_rate', None)
         trial.set_user_attr('status', f'error: {str(e)[:50]}')
         return 0.0
 

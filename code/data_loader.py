@@ -188,16 +188,19 @@ class QueensDataset(Dataset):
     def get(self, idx: int) -> HeteroData:
         e = self.records[idx]
 
-        region  = np.asarray(e["region"],        dtype=np.int64)   # (n, n)
-        partial = np.asarray(e["partial_board"], dtype=np.int64)   # (n, n)
-        label   = np.asarray(e["label_board"],   dtype=np.int64)   # (n, n)
-        n       = region.shape[0]
-        N2      = n * n
+        region = np.asarray(e["region"], dtype=np.int64)   # (n, n)
+        if "partial_board" not in e:
+            partial = np.zeros_like(region, dtype=np.int64)      # (n, n)
+        else:
+            partial = np.asarray(e["partial_board"], dtype=np.int64)   # (n, n)
+        label = np.asarray(e["label_board"],   dtype=np.int64)   # (n, n)
+        n = region.shape[0]
+        N2 = n * n
 
         coords = np.indices((n, n)).reshape(2, -1).T.astype(np.float32) / (n - 1)  # (N², 2)
 
         reg_onehot = np.zeros((N2, self.max_regions), dtype=np.float32)
-        flat_ids   = region.flatten()
+        flat_ids = region.flatten()
         reg_onehot[np.arange(N2), flat_ids] = 1.0                                  # (N², R)
 
         has_q = partial.flatten()[:, None].astype(np.float32)                      # (N², 1)
@@ -217,8 +220,14 @@ class QueensDataset(Dataset):
             data['cell', edge_type, 'cell'].edge_index = edge_index
 
         data.n = torch.tensor([n], dtype=torch.long)
-        data.step = torch.tensor([e["step"]], dtype=torch.long)
-        data.meta = dict(source=e["source"], iteration=e["iteration"])
+        if "step" in e:
+            data.step = torch.tensor([e["step"]], dtype=torch.long)
+        else:
+            data.step = torch.tensor([0], dtype=torch.long)
+        if "meta" in e:
+            data.meta = dict(source=e["source"], iteration=e["iteration"])
+        else:
+            data.meta = dict(source=e["source"])
 
         return data
     
