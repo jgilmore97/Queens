@@ -4,10 +4,31 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 from typing import Dict, List, Tuple, Optional
 from pathlib import Path
+from PIL import Image
 
 from model import HRM, HeteroGAT, GAT, HRM_FullSpatial
 from data_loader import build_heterogeneous_edge_index
 from board_manipulation import solve_queens
+
+
+class _SingleBatch:
+    """Minimal batch wrapper for single-puzzle inference with HRM models."""
+    __slots__ = ('x_dict', 'edge_index_dict', 'num_graphs', '_cell')
+    
+    def __init__(self, x: torch.Tensor, edge_dict: Dict, device):
+        self.x_dict = {'cell': x}
+        self.edge_index_dict = edge_dict
+        self.num_graphs = 1
+        self._cell = type('CellData', (), {
+            'x': x,
+            'batch': torch.zeros(x.shape[0], dtype=torch.long, device=device),
+            'num_nodes': x.shape[0]
+        })()
+    
+    def __getitem__(self, key):
+        if key == 'cell':
+            return self._cell
+        return self.edge_index_dict.get(key)
 
 
 class Solver:
@@ -111,20 +132,65 @@ class Solver:
 
     def _process_intermediates(self, intermediates: dict, n: int,
                              activation_metric: str = 'l2_norm') -> dict:
-        """Convert HRM intermediates (L-states) to per-cycle activation heatmaps grouped by early/mid/late stages."""
-        L_states = intermediates['L_states']  # List of 6 tensors [C, d]
+        """Convert HRM intermediates to per-cycle activation heatmaps."""
+        L_states = intermediates['L_states']
+        H_states = intermediates.get('H_states', None)
+        
+        num_L = len(L_states)
+        t_micro = 2 
+        n_cycles = num_L // t_micro
 
-        L_early = self._compute_cycle_activation(L_states[0:2], n, activation_metric)  # Micro 0-1 of cycle 0
-        L_mid = self._compute_cycle_activation(L_states[2:4], n, activation_metric)    # Micro 0-1 of cycle 1
-        L_late = self._compute_cycle_activation(L_states[4:6], n, activation_metric)   # Micro 0-1 of cycle 2
+        result = {'L': {}}
+        
+        if n_cycles >= 3:
+            result['L']['early'] = self._compute_cycle_activation(L_states[0:2], n, activation_metric)
+            result['L']['mid'] = self._compute_cycle_activation(L_states[2:4], n, activation_metric)
+            result['L']['late'] = self._compute_cycle_activation(L_states[4:6], n, activation_metric)
+        elif n_cycles == 2:
+            result['L']['early'] = self._compute_cycle_activation(L_states[0:2], n, activation_metric)
+            result['L']['late'] = self._compute_cycle_activation(L_states[2:4], n, activation_metric)
+        else:
+            result['L']['early'] = self._compute_cycle_activation(L_states, n, activation_metric)
 
-        return {
-            'L': {
-                'early': L_early,
-                'mid': L_mid,
-                'late': L_late
-            }
-        }
+        if H_states is not None and len(H_states) > 0:
+            result['H'] = {}
+            if len(H_states) >= 3:
+                result['H']['early'] = self._compute_single_activation(H_states[0], n, activation_metric)
+                result['H']['mid'] = self._compute_single_activation(H_states[1], n, activation_metric)
+                result['H']['late'] = self._compute_single_activation(H_states[2], n, activation_metric)
+            elif len(H_states) == 2:
+                result['H']['early'] = self._compute_single_activation(H_states[0], n, activation_metric)
+                result['H']['late'] = self._compute_single_activation(H_states[1], n, activation_metric)
+            else:
+                result['H']['final'] = self._compute_single_activation(H_states[0], n, activation_metric)
+
+        return result
+
+    def _compute_single_activation(self, state: torch.Tensor, n: int,
+                                    activation_metric: str = 'l2_norm') -> np.ndarray:
+        """Compute per-cell activation from a single state tensor [N, d], reshaped to [n, n]."""
+        if activation_metric == 'l2_norm':
+            activations = torch.norm(state, dim=1)
+        elif activation_metric == 'mean_embedding':
+            activations = state.mean(dim=1)
+        elif activation_metric == 'max_embedding':
+            activations = torch.max(torch.abs(state), dim=1)[0]
+        else:
+            raise ValueError(f"Unknown activation_metric: {activation_metric}")
+
+        heatmap = activations.cpu().numpy().reshape(n, n)
+
+        if activation_metric == 'mean_embedding':
+            heatmap_abs_max = np.max(np.abs(heatmap))
+            if heatmap_abs_max > 1e-6:
+                heatmap = heatmap / heatmap_abs_max
+        else:
+            heatmap_min = heatmap.min()
+            heatmap_max = heatmap.max()
+            if heatmap_max > heatmap_min:
+                heatmap = (heatmap - heatmap_min) / (heatmap_max - heatmap_min)
+
+        return heatmap
 
     def _compute_cycle_activation(self, state_list: List[torch.Tensor], n: int,
                                  activation_metric: str = 'l2_norm') -> np.ndarray:
@@ -144,12 +210,10 @@ class Solver:
         heatmap = activations.cpu().numpy().reshape(n, n)  # [n, n]
 
         if activation_metric == 'mean_embedding':
-            # Use centered normalization for diverging around 0
             heatmap_abs_max = np.max(np.abs(heatmap))
             if heatmap_abs_max > 1e-6:
                 heatmap = heatmap / heatmap_abs_max
         else:
-            # Normalize to [0, 1] for L2 and max
             heatmap_min = heatmap.min()
             heatmap_max = heatmap.max()
             if heatmap_max > heatmap_min:
@@ -168,22 +232,27 @@ class Solver:
         node_features = node_features.to(self.device)
 
         with torch.no_grad():
-            x_dict = {'cell': node_features}
             edge_index_dict_formatted = {
                 ('cell', 'line_constraint', 'cell'): edge_index_dict['line_constraint'],
                 ('cell', 'region_constraint', 'cell'): edge_index_dict['region_constraint'],
                 ('cell', 'diagonal_constraint', 'cell'): edge_index_dict['diagonal_constraint'],
             }
 
-            if capture_activations and isinstance(self.model, HRM):
-                logits, intermediates = self.model(x_dict, edge_index_dict_formatted,
-                                                   return_intermediates=True)
-                activation_dict = self._process_intermediates(intermediates, n, activation_metric)
+            if isinstance(self.model, (HRM, HRM_FullSpatial)):
+                # Need batch for HRM models
+                batch = _SingleBatch(node_features, edge_index_dict_formatted, self.device)
+                if capture_activations:
+                    logits, intermediates = self.model(batch, return_intermediates=True)
+                    activation_dict = self._process_intermediates(intermediates, n, activation_metric)
+                else:
+                    logits = self.model(batch)
+                    activation_dict = None
             else:
+                x_dict = {'cell': node_features}
                 logits = self.model(x_dict, edge_index_dict_formatted)
                 activation_dict = None
 
-        logits_np = logits.cpu().numpy().reshape(n, n)  # [n, n]
+        logits_np = logits.cpu().numpy().reshape(n, n)
         flat_logits = logits_np.flatten()
         top_idx = np.argmax(flat_logits)
         top_logit = flat_logits[top_idx]
@@ -245,12 +314,12 @@ class Solver:
     def visualize_solution(self, puzzle: dict, solution: np.ndarray,
                           activations: List[dict], output_dir: Optional[str] = None,
                           show_regions: bool = True, activation_metric: str = 'max_embedding') -> None:
-        """Visualize the reasoning progression across queen placements with L-state activation heatmaps."""
+        """Visualize the reasoning progression across queen placements with L and H-state activation heatmaps."""
         if output_dir:
             output_path = Path(output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
 
-        region_board = np.array(puzzle['region'])  # [n, n]
+        region_board = np.array(puzzle['region'])
         n = region_board.shape[0]
         num_placements = len(activations)
 
@@ -260,44 +329,38 @@ class Solver:
             row, col = act_dict['placement']
             logit = act_dict['logit']
 
-            fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+            has_H = 'H' in act_dict
+            L_maps = act_dict['L']
+            H_maps = act_dict.get('H', {})
+
+            num_L_cols = len(L_maps)
+            num_H_cols = len(H_maps) if has_H else 0
+            num_cols = 1 + num_L_cols + num_H_cols
+
+            fig, axes = plt.subplots(1, num_cols, figsize=(5 * num_cols, 5))
+            if num_cols == 1:
+                axes = [axes]
+            
             fig.suptitle(f"Queen {step_idx + 1}/{num_placements}: Placement ({row}, {col}) | Logit: {logit:.3f}",
                         fontsize=14, fontweight='bold')
 
             ax = axes[0]
             if show_regions:
                 self._draw_colored_board(ax, region_board, placed_queens, row, col)
-
             ax.set_title('Board State', fontsize=12, fontweight='bold')
 
-            L_maps = act_dict['L']
-            for col_idx, (stage_name, heatmap) in enumerate([
-                ('Early', L_maps['early']),
-                ('Mid', L_maps['mid']),
-                ('Late', L_maps['late'])
-            ]):
-                ax = axes[col_idx + 1]
+            col_idx = 1
+            for stage_name, heatmap in L_maps.items():
+                ax = axes[col_idx]
+                self._draw_heatmap(ax, heatmap, n, f"L-{stage_name.capitalize()}", 
+                                   placed_queens, row, col)
+                col_idx += 1
 
-                im = ax.imshow(heatmap, cmap='RdBu_r', vmin=0, vmax=1)
-
-                ax.set_xticks(np.arange(-0.5, n, 1), minor=True)
-                ax.set_yticks(np.arange(-0.5, n, 1), minor=True)
-                ax.grid(which='minor', color='black', linewidth=1)
-
-                ax.set_title(f"L-{stage_name}", fontsize=12, fontweight='bold')
-                ax.set_xticks([])
-                ax.set_yticks([])
-                ax.tick_params(which='both', bottom=False, left=False,
-                             labelbottom=False, labelleft=False)
-
-                for prev_row, prev_col in placed_queens:
-                    ax.text(prev_col, prev_row, 'X', fontsize=24, ha='center', va='center',
-                           color='black', fontweight='bold')
-
-                ax.scatter([col], [row], marker='*', color='lime', s=1000,
-                          edgecolors='white', linewidths=3, zorder=10)
-
-                plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            for stage_name, heatmap in H_maps.items():
+                ax = axes[col_idx]
+                self._draw_heatmap(ax, heatmap, n, f"H-{stage_name.capitalize()}", 
+                                   placed_queens, row, col, cmap='PuOr_r')
+                col_idx += 1
 
             plt.tight_layout()
 
@@ -316,10 +379,33 @@ class Solver:
         if output_dir:
             self._create_summary_image(output_dir, num_placements, n)
 
+    def _draw_heatmap(self, ax, heatmap: np.ndarray, n: int, title: str,
+                      placed_queens: List[Tuple[int, int]], current_row: int, current_col: int,
+                      cmap: str = 'RdBu_r') -> None:
+        """Draw a heatmap with queen markers."""
+        im = ax.imshow(heatmap, cmap=cmap, vmin=0, vmax=1)
+
+        ax.set_xticks(np.arange(-0.5, n, 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, n, 1), minor=True)
+        ax.grid(which='minor', color='black', linewidth=1)
+
+        ax.set_title(title, fontsize=12, fontweight='bold')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.tick_params(which='both', bottom=False, left=False,
+                      labelbottom=False, labelleft=False)
+
+        for prev_row, prev_col in placed_queens:
+            ax.text(prev_col, prev_row, 'X', fontsize=24, ha='center', va='center',
+                   color='black', fontweight='bold')
+
+        ax.scatter([current_col], [current_row], marker='*', color='lime', s=1000,
+                  edgecolors='white', linewidths=3, zorder=10)
+
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
     def _create_summary_image(self, output_dir, num_placements, n):
         """Concatenate all step visualizations vertically into a summary image."""
-        from PIL import Image
-
         output_path = Path(output_dir)
         step_images = []
 
