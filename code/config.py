@@ -83,9 +83,9 @@ class TrainingConfig:
 
     # Scheduler
     scheduler_type: str = "cosine"  # "cosine", "plateau", "step", "none"
-    cosine_t_max: int = 18
+    cosine_t_max: int = 24
     cosine_eta_min: float = 1e-6
-    constant_lr_epochs = 6  # Last 6 at eta_min
+    constant_lr_epochs = 0
     constant_lr = 1e-05
 
 @dataclass
