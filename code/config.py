@@ -25,20 +25,21 @@ def _detect_notebook_environment():
 class ModelConfig:
     """Model architecture configuration."""
     input_dim: int = 14
-    hidden_dim: int = 160
+    hidden_dim: int = 128
     layer_count: int = 6
     dropout: float = 0.12
     use_batch_norm: bool = False
 
-    gat_heads: int = 2
-    hgt_heads: int = 8
+    gat_heads: int = 4
+    hgt_heads: int = 4
 
-    model_type: str = "HRM"  # "GAT", "HeteroGAT", or "HRM"
+    model_type: str = "HRM_FullSpatial"  # "GAT", "HeteroGAT", "HRM", or "HRM_FullSpatial"
     hetero_aggr: str = "sum"
 
     # HRM-specific
     n_cycles: int = 3
     t_micro: int = 2
+    hmod_heads: int = 4
     use_input_injection: bool = True
     z_dim: int = 128
     use_hmod: bool = False # When true make same size batches True as well
@@ -50,24 +51,26 @@ class BenchmarkConfig:
     input_dim: int = 14
     hidden_dim: int = 128
     layers: int = 6
-    dropout: float = 0.1
+    dropout: float = 0.12
 
 @dataclass
 class TrainingConfig:
     """Training hyperparameters."""
-    epochs: int = 18
-    batch_size: int = 512
-    learning_rate: float = 0.0015
-    weight_decay: float = 3e-6
+    epochs: int = 24
+    batch_size: int = 512 
+    learning_rate: float = 1.5e-3
+    weight_decay: float = 0.000003
     val_ratio: float = 0.10
+    warmup_epochs: int = 0 
+    warmup_start_factor: float = 0.1
 
     # Dataset combination
     combine_state0: bool = True  # Combine state-0 into training set upfront
     state0_json_path: str = "data/State0TrainingSet.json"
 
     # Batch sampler options
-    same_size_batches: bool = False 
-    drop_last: bool = False  # Drop last incomplete batch
+    same_size_batches: bool = True 
+    drop_last: bool = True  # Drop last incomplete batch
     
     # Legacy curriculum options (unused when combine_state0=True)
     state0_epochs: list = field(default_factory=lambda: [])
@@ -80,8 +83,10 @@ class TrainingConfig:
 
     # Scheduler
     scheduler_type: str = "cosine"  # "cosine", "plateau", "step", "none"
-    cosine_t_max: int = 18  # Should match epochs
+    cosine_t_max: int = 24
     cosine_eta_min: float = 1e-6
+    constant_lr_epochs = 0
+    constant_lr = 1e-05
 
 @dataclass
 class DataConfig:
@@ -105,14 +110,14 @@ class ExperimentConfig:
     log_predictions_every_n_epochs: int = 2
     save_model_every_n_epochs: int = 10
 
-    checkpoint_dir: str = "checkpoints/transformer/HRM"
+    checkpoint_dir: str = "checkpoints/transformer/HRM/FullSpatial"
     log_dir: str = "logs"
 
 @dataclass
 class SystemConfig:
     """System configuration."""
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
-    mixed_precision: bool = True
+    mixed_precision: bool = False
     compile_model: bool = False
     profile_memory: bool = False
 
@@ -156,9 +161,9 @@ class Config:
 
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "Post Sweep Baseline",
-        "tags": ["HRM", "cosine_annealing", "combined_data", "Z per_cycle"],
-        "notes": "Testing with best param config from sweep"
+        "experiment_name": "Full Spacial HRM - 1e-5 constant LR",
+        "tags": ["FullSpatial", "HRM", "No Vector Compression", "More Epochs", "Lower Eta Min", "Higher LR", "Lower WD"],
+        "notes": "Using HRM_FullSpatial model with no vector compression and lower cosine scheduler eta_min."
     }
 }
 

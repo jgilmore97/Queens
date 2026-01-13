@@ -32,6 +32,7 @@ class ExperimentTracker:
     def _init_wandb(self, resume_id: Optional[str]):
         """Initialize W&B with config and optional resume."""
         simple_config = {
+            # Model architecture
             "model_type": self.config.model.model_type,
             "input_dim": self.config.model.input_dim,
             "hidden_dim": self.config.model.hidden_dim,
@@ -39,14 +40,32 @@ class ExperimentTracker:
             "dropout": self.config.model.dropout,
             "gat_heads": self.config.model.gat_heads,
             "hgt_heads": self.config.model.hgt_heads,
+            "hmod_heads": getattr(self.config.model, 'hmod_heads', None),
+            "n_cycles": getattr(self.config.model, 'n_cycles', None),
+            "t_micro": getattr(self.config.model, 't_micro', None),
+            
+            # Training
             "epochs": self.config.training.epochs,
             "batch_size": self.config.training.batch_size,
             "learning_rate": self.config.training.learning_rate,
             "weight_decay": self.config.training.weight_decay,
             "focal_alpha": self.config.training.focal_alpha,
             "focal_gamma": self.config.training.focal_gamma,
+            
+            # Scheduler
+            "scheduler_type": self.config.training.scheduler_type,
+            "cosine_t_max": self.config.training.cosine_t_max,
+            "cosine_eta_min": self.config.training.cosine_eta_min,
+            "warmup_epochs": getattr(self.config.training, 'warmup_epochs', 0),
+            "warmup_start_factor": getattr(self.config.training, 'warmup_start_factor', 0.1),
+            
+            # System
             "device": self.config.system.device,
+            "mixed_precision": getattr(self.config.system, 'mixed_precision', False),
         }
+        
+        # Remove None values for cleaner logging
+        simple_config = {k: v for k, v in simple_config.items() if v is not None}
 
         init_args = {
             "project": self.config.experiment.project_name,
@@ -250,29 +269,92 @@ class ExperimentTracker:
         model.train()
         return pred_metrics
 
+    def _build_config_dict(self) -> Dict[str, Any]:
+        """Build config_dict based on model_type, including only relevant parameters."""
+        model_type = self.config.model.model_type
+        
+        config_dict = {
+            "model_type": model_type,
+            "input_dim": self.config.model.input_dim,
+            "hidden_dim": self.config.model.hidden_dim,
+            "dropout": self.config.model.dropout,
+        }
+        
+        if model_type == "GAT":
+            config_dict.update({
+                "layer_count": self.config.model.layer_count,
+                "gat_heads": self.config.model.gat_heads,
+            })
+        
+        elif model_type == "HeteroGAT":
+            config_dict.update({
+                "layer_count": self.config.model.layer_count,
+                "gat_heads": self.config.model.gat_heads,
+                "hgt_heads": self.config.model.hgt_heads,
+                "use_batch_norm": self.config.model.use_batch_norm,
+            })
+        
+        elif model_type == "HRM":
+            config_dict.update({
+                "gat_heads": self.config.model.gat_heads,
+                "hgt_heads": self.config.model.hgt_heads,
+                "n_cycles": self.config.model.n_cycles,
+                "t_micro": self.config.model.t_micro,
+                "use_input_injection": self.config.model.use_input_injection,
+                "z_dim": self.config.model.z_dim,
+                "use_hmod": self.config.model.use_hmod,
+                "use_batch_norm": self.config.model.use_batch_norm,
+                "same_size_batches": self.config.training.same_size_batches,
+            })
+        
+        elif model_type == "HRM_FullSpatial":
+                    config_dict.update({
+                        "gat_heads": self.config.model.gat_heads,
+                        "hgt_heads": self.config.model.hgt_heads,
+                        "hmod_heads": self.config.model.hmod_heads,
+                        "n_cycles": self.config.model.n_cycles,
+                        "t_micro": self.config.model.t_micro,
+                        "learning_rate": self.config.training.learning_rate,
+                        "weight_decay": self.config.training.weight_decay,
+                        "focal_alpha": self.config.training.focal_alpha,
+                        "focal_gamma": self.config.training.focal_gamma,
+                        "cosine_t_max": self.config.training.cosine_t_max,
+                        "cosine_eta_min": self.config.training.cosine_eta_min,
+                        "warmup_epochs": getattr(self.config.training, 'warmup_epochs', 0),
+                        "warmup_start_factor": getattr(self.config.training, 'warmup_start_factor', 0.1),
+                    })
+        
+        elif model_type == "GNN":
+            config_dict.update({
+                "layer_count": self.config.model.layer_count,
+            })
+        
+        else:
+            config_dict.update({
+                "layer_count": getattr(self.config.model, 'layer_count', None),
+                "gat_heads": getattr(self.config.model, 'gat_heads', None),
+                "hgt_heads": getattr(self.config.model, 'hgt_heads', None),
+                "n_cycles": getattr(self.config.model, 'n_cycles', None),
+                "t_micro": getattr(self.config.model, 't_micro', None),
+                "use_input_injection": getattr(self.config.model, 'use_input_injection', None),
+                "z_dim": getattr(self.config.model, 'z_dim', None),
+                "use_hmod": getattr(self.config.model, 'use_hmod', None),
+                "use_batch_norm": getattr(self.config.model, 'use_batch_norm', None),
+                "same_size_batches": getattr(self.config.training, 'same_size_batches', None),
+                "hmod_heads": getattr(self.config.model, 'hmod_heads', None),
+            })
+            config_dict = {k: v for k, v in config_dict.items() if v is not None}
+        
+        return config_dict
+
     def save_checkpoint(self, model: torch.nn.Module, optimizer, epoch: int,
                     metrics: Dict[str, float], is_best: bool = False):
-        """Save model checkpoint locally."""
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'metrics': metrics,
-            'config_dict': {
-                "model_type": self.config.model.model_type,
-                "input_dim": self.config.model.input_dim,
-                "hidden_dim": self.config.model.hidden_dim,
-                "layer_count": self.config.model.layer_count,
-                "dropout": self.config.model.dropout,
-                "gat_heads": self.config.model.gat_heads,
-                "hgt_heads": self.config.model.hgt_heads,
-                "n_cycles": getattr(self.config.model, 'n_cycles', 2),
-                "t_micro": getattr(self.config.model, 't_micro', 2),
-                "use_input_injection": getattr(self.config.model, 'use_input_injection', True),
-                "z_dim": getattr(self.config.model, 'z_dim', 128),
-                "use_hmod": getattr(self.config.model, 'use_hmod', False),
-                "same_size_batches": getattr(self.config.training, 'same_size_batches', False)
-            }
+            'config_dict': self._build_config_dict(),
         }
 
         if epoch % self.config.experiment.save_model_every_n_epochs == 0:

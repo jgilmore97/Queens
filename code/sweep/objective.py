@@ -5,18 +5,15 @@ from torch import nn, optim
 from torch_geometric.loader import DataLoader
 from tqdm.auto import tqdm
 import optuna
-from typing import Dict, Any
+from typing import Dict
 from pathlib import Path
 import traceback
 
-from model import HRM
-from data_loader import (
-    QueensDataset,
-    get_combined_queens_loaders,
-    SizeBucketBatchSampler,
-)
+from model import HRM_FullSpatial
+from data_loader import get_combined_queens_loaders
 from train import FocalLoss
-from sweep.vectorized_eval import evaluate_solve_rate
+from vectorized_eval import evaluate_solve_rate
+from config import Config
 
 
 def set_seed(seed: int = 42) -> None:
@@ -35,29 +32,23 @@ def get_project_root() -> Path:
     return Path(__file__).parent.parent.parent
 
 
-def create_model_from_trial(trial: optuna.Trial) -> HRM:
+def create_model_from_trial(trial: optuna.Trial, config: Config) -> HRM_FullSpatial:
     """Create HRM with hyperparameters sampled from trial."""
-    hidden_dim = trial.suggest_categorical('hidden_dim', [64, 128, 160])
+    hidden_dim = 128
     gat_heads = trial.suggest_categorical('gat_heads', [2, 4])
     hgt_heads = trial.suggest_categorical('hgt_heads', [4, 8])
+    hmod_heads = trial.suggest_categorical('hmod_heads', [4, 8])
     dropout = trial.suggest_float('dropout', 0.08, 0.3)
-    z_dim = trial.suggest_categorical('z_dim', [64, 128, 256])
-    n_cycles = 2
-    t_micro = trial.suggest_categorical('t_micro', [2, 3])
 
-    model = HRM(
-        input_dim=14,
+    model = HRM_FullSpatial(
+        input_dim=config.model.input_dim,
         hidden_dim=hidden_dim,
         gat_heads=gat_heads,
         hgt_heads=hgt_heads,
+        hmod_heads=hmod_heads,
         dropout=dropout,
-        use_batch_norm=False,
-        n_cycles=n_cycles,
-        t_micro=t_micro,
-        use_input_injection=True,
-        z_dim=z_dim,
-        use_hmod=False,
-        same_size_batches=False,
+        n_cycles=config.model.n_cycles,
+        t_micro=config.model.t_micro
     )
 
     return model
@@ -108,10 +99,12 @@ def objective(
     seed: int = 42,
 ) -> float:
     """
-    Optuna objective function.
-    Trains HRM using combined dataset for specified epochs.
+    Optuna objective function for HRM_FullSpatial.
+    Uses Config for fixed parameters, trial for hyperparameters being searched.
     Returns solve rate on validation set.
     """
+    config = Config()
+    
     set_seed(seed)
 
     root = get_project_root()
@@ -119,19 +112,15 @@ def objective(
     state0_json = str(root / state0_json)
     val_json = str(root / val_json)
 
-    # Sample training hyperparameters
     learning_rate = trial.suggest_float('learning_rate', 1e-4, 3e-3, log=True)
     weight_decay = trial.suggest_float('weight_decay', 1e-6, 1e-4, log=True)
     focal_alpha = trial.suggest_float('focal_alpha', 0.15, 0.40)
     focal_gamma = trial.suggest_float('focal_gamma', 1.5, 3.0)
-    batch_size = 512
 
     num_epochs = 4
 
-    epoch2_solve_rate = None
-
     try:
-        model = create_model_from_trial(trial)
+        model = create_model_from_trial(trial, config)
         model = model.to(device)
 
         param_count = sum(p.numel() for p in model.parameters())
@@ -144,53 +133,34 @@ def objective(
         )
         criterion = FocalLoss(alpha=focal_alpha, gamma=focal_gamma)
 
-        train_loader, val_loader = get_combined_queens_loaders(
+        train_loader, _ = get_combined_queens_loaders(
             train_json,
             state0_json,
-            batch_size=batch_size,
-            val_ratio=val_ratio,
+            batch_size=config.training.batch_size,
+            val_ratio=config.training.val_ratio,
             seed=seed,
-            num_workers=4,
-            pin_memory=True,
-            shuffle_train=True,
-            same_size_batches=False,
-            drop_last=False,
+            num_workers=config.data.num_workers,
+            pin_memory=config.data.pin_memory,
+            shuffle_train=config.data.shuffle_train,
+            same_size_batches=config.training.same_size_batches,
+            drop_last=config.training.drop_last,
         )
 
         for epoch in range(1, num_epochs + 1):
             metrics = train_epoch_simple(model, train_loader, criterion, optimizer, device, epoch)
             print(f"  Epoch {epoch}: loss={metrics['loss']:.4f}")
 
-            # Early checkpoint for pruning
-            # if epoch == 4:
-            #     eval_results = evaluate_solve_rate(
-            #         model,
-            #         val_json_path=val_json,
-            #         device=device,
-            #         batch_size=128,
-            #         val_ratio=val_ratio,
-            #         seed=seed,
-            #     )
-            #     epoch2_solve_rate = eval_results['solve_rate']
-            #     print(f"  Epoch 4 solve_rate: {epoch2_solve_rate:.4f}")
-
-            #     trial.report(epoch2_solve_rate, step=4)
-            #     if trial.should_prune():
-            #         print(f"  Trial {trial.number} pruned at epoch 4")
-            #         raise optuna.TrialPruned()
-
         eval_results = evaluate_solve_rate(
             model,
             val_json_path=val_json,
             device=device,
-            batch_size=128,
-            val_ratio=val_ratio,
+            batch_size=config.training.batch_size // 4,
+            val_ratio=config.training.val_ratio,
             seed=seed,
         )
         final_solve_rate = eval_results['solve_rate']
         print(f"  Final solve_rate: {final_solve_rate:.4f}")
 
-        # trial.set_user_attr('epoch4_solve_rate', epoch2_solve_rate)
         trial.set_user_attr('final_solve_rate', final_solve_rate)
         trial.set_user_attr('param_count', param_count)
         trial.set_user_attr('status', 'completed')
@@ -198,7 +168,6 @@ def objective(
         return final_solve_rate
 
     except optuna.TrialPruned:
-        trial.set_user_attr('epoch4_solve_rate', epoch2_solve_rate)
         trial.set_user_attr('final_solve_rate', None)
         trial.set_user_attr('status', 'pruned')
         raise
