@@ -2,9 +2,10 @@ import torch
 from torch import nn, optim
 import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
-from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR, ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR, ReduceLROnPlateau, SequentialLR, LinearLR, ConstantLR
 from tqdm.auto import tqdm
 import numpy as np
+from torch.cuda.amp import autocast
 
 from experiment_tracker import ExperimentTracker
 from data_loader import (
@@ -17,7 +18,7 @@ from data_loader import (
 )
 from config import Config
 from model import GAT, HeteroGAT, HRM
-from sweep.vectorized_eval import evaluate_solve_rate
+from vectorized_eval import evaluate_solve_rate
 
 
 def calculate_top1_metrics(logits, labels, batch_info):
@@ -196,7 +197,7 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch):
 
     return metrics
 
-def train_epoch_hetero(model, loader, criterion, optimizer, device, epoch):
+def train_epoch_hetero(model, loader, criterion, optimizer, device, epoch, use_amp=True):
     """Train for one epoch with top-1 metrics for heterogeneous data."""
     model.train()
     total_loss, total_nodes = 0.0, 0
@@ -215,10 +216,12 @@ def train_epoch_hetero(model, loader, criterion, optimizer, device, epoch):
         batch = batch.to(device)
         optimizer.zero_grad()
 
-        # if hasattr(batch, 'x_dict'):
-        logits = model(batch)
-        labels = batch['cell'].y
-        num_nodes = batch['cell'].num_nodes
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=use_amp):
+            logits = model(batch)
+            labels = batch['cell'].y
+            num_nodes = batch['cell'].num_nodes
+            loss = criterion(logits, labels.float())
+
         # else:
         #     x_dict = {'cell': batch['cell'].x}
         #     edge_index_dict = {
@@ -230,10 +233,10 @@ def train_epoch_hetero(model, loader, criterion, optimizer, device, epoch):
         #     labels = batch['cell'].y
         #     num_nodes = len(labels)
 
-        loss = criterion(logits, labels.float())
-
         loss.backward()
         optimizer.step()
+
+        logits = logits.float()
 
         preds = (logits > 0).long()
         batch_correct = (preds == labels).sum().item()
@@ -394,7 +397,7 @@ def evaluate_epoch(model, loader, criterion, device, epoch):
     return metrics
 
 @torch.no_grad()
-def evaluate_epoch_hetero(model, loader, criterion, device, epoch):
+def evaluate_epoch_hetero(model, loader, criterion, device, epoch, use_amp=True):
     """Evaluate model for one epoch with top-1 metrics for heterogeneous data."""
     model.eval()
     total_loss, total_nodes = 0.0, 0
@@ -414,22 +417,28 @@ def evaluate_epoch_hetero(model, loader, criterion, device, epoch):
     for batch in pbar:
         batch = batch.to(device)
 
-        if hasattr(batch, 'x_dict'):
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=use_amp):
             logits = model(batch)
             labels = batch['cell'].y
             num_nodes = batch['cell'].num_nodes
-        else:
-            x_dict = {'cell': batch['cell'].x}
-            edge_index_dict = {
-                ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
-                ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
-                ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
-            }
-            logits = model(x_dict, edge_index_dict)
-            labels = batch['cell'].y
-            num_nodes = len(labels)
+            loss = criterion(logits, labels.float())
 
-        loss = criterion(logits, labels.float())
+        # if hasattr(batch, 'x_dict'):
+        #     logits = model(batch)
+        #     labels = batch['cell'].y
+        #     num_nodes = batch['cell'].num_nodes
+        # else:
+        #     x_dict = {'cell': batch['cell'].x}
+        #     edge_index_dict = {
+        #         ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
+        #         ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
+        #         ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
+        #     }
+        #     logits = model(x_dict, edge_index_dict)
+        #     labels = batch['cell'].y
+        #     num_nodes = len(labels)
+
+        logits = logits.float()
 
         probs = torch.sigmoid(logits)
         preds = (logits > 0).long()
@@ -508,19 +517,57 @@ def evaluate_epoch_hetero(model, loader, criterion, device, epoch):
     return metrics
 
 def create_scheduler(optimizer, config):
-    """Create learning rate scheduler based on config."""
-    if config.training.scheduler_type == "cosine":
-        return CosineAnnealingLR(optimizer,
-                               T_max=config.training.cosine_t_max,
-                               eta_min=config.training.cosine_eta_min)
-    elif config.training.scheduler_type == "step":
-        return StepLR(optimizer, step_size=30, gamma=0.1)
-    elif config.training.scheduler_type == "plateau":
+    """Create learning rate scheduler with optional warmup and constant tail."""
+    warmup_epochs = getattr(config.training, 'warmup_epochs', 0)
+    constant_epochs = getattr(config.training, 'constant_lr_epochs', 0)
+    
+    if config.training.scheduler_type == "plateau":
         return ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5)
     elif config.training.scheduler_type == "none":
         return None
-    else:
+    elif config.training.scheduler_type == "step":
+        return StepLR(optimizer, step_size=30, gamma=0.1)
+    elif config.training.scheduler_type != "cosine":
         raise ValueError(f"Unknown scheduler type: {config.training.scheduler_type}")
+    
+    # Cosine schedule with optional warmup and constant tail
+    schedulers = []
+    milestones = []
+    
+    cosine_epochs = config.training.cosine_t_max - warmup_epochs
+    
+    if warmup_epochs > 0:
+        warmup_scheduler = LinearLR(
+            optimizer,
+            start_factor=config.training.warmup_start_factor,
+            end_factor=1.0,
+            total_iters=warmup_epochs
+        )
+        schedulers.append(warmup_scheduler)
+        milestones.append(warmup_epochs)
+    
+    cosine_scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=max(1, cosine_epochs),
+        eta_min=config.training.cosine_eta_min
+    )
+    schedulers.append(cosine_scheduler)
+    
+    if constant_epochs > 0:
+        milestones.append(warmup_epochs + cosine_epochs)
+        constant_lr_value = getattr(config.training, 'constant_lr', None) or config.training.cosine_eta_min
+        constant_factor = constant_lr_value / config.training.learning_rate
+        constant_scheduler = ConstantLR(
+            optimizer,
+            factor=constant_factor,
+            total_iters=constant_epochs
+        )
+        schedulers.append(constant_scheduler)
+    
+    if len(schedulers) == 1:
+        return schedulers[0]
+    
+    return SequentialLR(optimizer, schedulers=schedulers, milestones=milestones)
 
 def run_training_with_tracking(model, train_loader, val_loader, config, resume_id=None):
     """Main training loop with experiment tracking and top-1 metrics."""
@@ -727,6 +774,7 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
         best_solve_rate = 0.0
         is_best = False
 
+        use_amp = config.system.mixed_precision and torch.cuda.is_available()
 
         print(f"Starting HETEROGENEOUS training for {config.training.epochs} epochs")
         print(f"Device: {device}")
@@ -747,8 +795,8 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
             if epoch_start_time:
                 epoch_start_time.record()
 
-            train_metrics = train_epoch_hetero(model, train_loader, criterion, optimizer, device, epoch)
-            val_metrics = evaluate_epoch_hetero(model, val_loader, criterion, device, epoch)
+            train_metrics = train_epoch_hetero(model, train_loader, criterion, optimizer, device, epoch, use_amp=use_amp)
+            val_metrics = evaluate_epoch_hetero(model, val_loader, criterion, device, epoch, use_amp=use_amp)
 
             if epoch_end_time:
                 epoch_end_time.record()

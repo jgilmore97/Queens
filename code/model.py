@@ -634,3 +634,226 @@ class HRM(nn.Module):
             return logits, intermediates
 
         return logits
+    
+class _LBlockSpatial(nn.Module):
+    def __init__(
+        self,
+        hidden_dim: int,
+        gat_heads: int,
+        hgt_heads: int,
+        dropout: float,
+        edge_types,
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        gat_head_dim = hidden_dim // gat_heads
+
+        self.gat1 = HeteroConv({
+            et: pyg_nn.GATConv(
+                hidden_dim, gat_head_dim,
+                heads=gat_heads, concat=True,
+                dropout=dropout, add_self_loops=True,
+            ) for et in edge_types
+        }, aggr='sum')
+
+        self.gat2 = HeteroConv({
+            et: pyg_nn.GATConv(
+                hidden_dim, gat_head_dim,
+                heads=gat_heads, concat=True,
+                dropout=dropout, add_self_loops=True,
+            ) for et in edge_types
+        }, aggr='sum')
+
+        self.hgt = HGTConv(
+            in_channels=hidden_dim,
+            out_channels=hidden_dim,
+            metadata=(['cell'], edge_types),
+            heads=hgt_heads,
+        )
+
+        self.norm1 = _RMSNorm(hidden_dim)
+        self.norm2 = _RMSNorm(hidden_dim)
+        self.norm_hgt = _RMSNorm(hidden_dim)
+
+        self.drop = nn.Dropout(dropout)
+        self.act = nn.GELU()
+
+    def forward(self, z_L, z_H, x_embedded, edge_index_dict):
+        h = z_L + z_H + x_embedded
+
+        h_out = self.gat1({'cell': h}, edge_index_dict)['cell']
+        h = self.act(h + self.drop(self.norm1(h_out)))
+
+        h_out = self.gat2({'cell': h}, edge_index_dict)['cell']
+        h = self.act(h + self.drop(self.norm2(h_out)))
+
+        h_out = self.hgt({'cell': h}, edge_index_dict)['cell']
+        h = self.act(h + self.drop(self.norm_hgt(h_out)))
+
+        return h
+
+
+class _HBlockTransformer(nn.Module):
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_heads: int,
+        dropout: float,
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.num_heads = num_heads
+        self.head_dim = hidden_dim // num_heads
+
+        assert hidden_dim % num_heads == 0
+
+        self.z_L_proj = nn.Linear(hidden_dim, hidden_dim)
+
+        self.q_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.k_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.v_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.o_proj = nn.Linear(hidden_dim, hidden_dim)
+
+        self.ffn = nn.Sequential(
+            nn.Linear(hidden_dim, 2 * hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(2 * hidden_dim, hidden_dim),
+        )
+
+        self.norm1 = _RMSNorm(hidden_dim)
+        self.norm2 = _RMSNorm(hidden_dim)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, z_H, z_L, batch_size):
+        B = batch_size
+        N = z_H.shape[0]
+        C = N // B 
+        d = self.hidden_dim
+        H = self.num_heads
+        Dh = self.head_dim
+
+        h = z_H + self.z_L_proj(z_L)
+
+        h = h.view(B, C, d)
+
+        q = self.q_proj(h).view(B, C, H, Dh).transpose(1, 2)  # [B, H, C, Dh]
+        k = self.k_proj(h).view(B, C, H, Dh).transpose(1, 2)
+        v = self.v_proj(h).view(B, C, H, Dh).transpose(1, 2)
+
+        scores = torch.matmul(q, k.transpose(-2, -1)) / (Dh ** 0.5)  # [B, H, C, C]
+        attn = torch.softmax(scores, dim=-1)
+        attn = self.drop(attn)
+
+        out = torch.matmul(attn, v)  # [B, H, C, Dh]
+        out = out.transpose(1, 2).contiguous().view(B, C, d)  # [B, C, d]
+        out = self.o_proj(out)
+
+        h = self.norm1(h + self.drop(out))
+
+        h = self.norm2(h + self.drop(self.ffn(h)))
+
+        return h.view(N, d)
+    
+class HRM_FullSpatial(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int = 128,
+        gat_heads: int = 2,
+        hgt_heads: int = 4,
+        hmod_heads: int = 4,
+        dropout: float = 0.10,
+        n_cycles: int = 3,
+        t_micro: int = 2,
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.n_cycles = n_cycles
+        self.t_micro = t_micro
+
+        self.edge_types = [
+            ('cell', 'line_constraint', 'cell'),
+            ('cell', 'region_constraint', 'cell'),
+            ('cell', 'diagonal_constraint', 'cell')
+        ]
+
+        print(f"HRM_FullSpatial configured:")
+        print(f"Cycles: {n_cycles}, Micro-steps: {t_micro}")
+        print(f"L-module: GNN (GAT + HGT) - local/fast")
+        print(f"H-module: Transformer - global/slow")
+
+        self.embed = _InitialEmbed(input_dim, hidden_dim, dropout)
+
+        self.l_block = _LBlockSpatial(
+            hidden_dim=hidden_dim,
+            gat_heads=gat_heads,
+            hgt_heads=hgt_heads,
+            dropout=dropout,
+            edge_types=self.edge_types,
+        )
+
+        self.h_block = _HBlockTransformer(
+            hidden_dim=hidden_dim,
+            num_heads=hmod_heads,
+            dropout=dropout,
+        )
+
+        self.z_H_init = nn.Parameter(torch.randn(hidden_dim) * 0.02)
+        self.z_L_init = nn.Parameter(torch.randn(hidden_dim) * 0.02)
+
+        self.readout = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(self, batch, return_intermediates=False):
+        x_dict = batch.x_dict
+        edge_index_dict = batch.edge_index_dict
+        
+        B = batch.num_graphs
+        N = x_dict['cell'].shape[0]
+        batch_idx = batch['cell'].batch 
+
+        x_embedded = self.embed(x_dict['cell'])  # [N, d]
+
+        z_H = self.z_H_init.unsqueeze(0).expand(N, -1).clone()
+        z_L = self.z_L_init.unsqueeze(0).expand(N, -1).clone()
+
+        if return_intermediates:
+            H_states, L_states = [], []
+
+        for cycle_idx in range(self.n_cycles):
+            for micro_idx in range(self.t_micro):
+                z_L = self.l_block(
+                    z_L=z_L,
+                    z_H=z_H,
+                    x_embedded=x_embedded,
+                    edge_index_dict=edge_index_dict,
+                )
+                if return_intermediates:
+                    L_states.append(z_L.detach().cpu())
+
+            z_H = self.h_block(
+                z_H=z_H,
+                z_L=z_L,
+                batch_size=B,
+            )
+            if return_intermediates:
+                H_states.append(z_H.detach().cpu())
+
+        logits = self.readout(z_H).squeeze(-1)
+
+        if return_intermediates:
+            nodes_per_graph = (batch_idx == 0).sum().item()
+            board_size = int(nodes_per_graph ** 0.5)
+            return logits, {
+                'H_states': H_states,
+                'L_states': L_states,
+                'final_logits': logits.detach().cpu(),
+                'board_size': board_size,
+            }
+
+        return logits

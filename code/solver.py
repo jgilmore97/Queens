@@ -5,7 +5,7 @@ import matplotlib.colors as colors
 from typing import Dict, List, Tuple, Optional
 from pathlib import Path
 
-from model import HRM, HeteroGAT, GAT
+from model import HRM, HeteroGAT, GAT, HRM_FullSpatial
 from data_loader import build_heterogeneous_edge_index
 from board_manipulation import solve_queens
 
@@ -21,15 +21,31 @@ class Solver:
     def load_model(self, model_path: str):
         checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
         model_config = checkpoint['config_dict']
-
+        state_dict = checkpoint['model_state_dict']
+    
+        has_h_block = any(k.startswith('h_block.') for k in state_dict.keys())
+        has_z_H_init = 'z_H_init' in state_dict
+        is_hrm_spatial = has_h_block and has_z_H_init
         is_hrm = model_config.get('model_type') == 'HRM' or 'n_cycles' in model_config
 
-        # Check if it's a homogeneous GAT
         is_homogeneous_gat = ('layer_count' in model_config and
                               'hgt_heads' not in model_config and
                               not is_hrm)
+        if is_hrm_spatial:
+            model = HRM_FullSpatial(
+                input_dim=model_config['input_dim'],
+                hidden_dim=model_config['hidden_dim'],
+                gat_heads=model_config.get('gat_heads', 2),
+                hgt_heads=model_config.get('hgt_heads', 4),
+                hmod_heads=model_config.get('hmod_heads', 4),
+                dropout=model_config.get('dropout', 0.1),
+                n_cycles=model_config.get('n_cycles', 3),
+                t_micro=model_config.get('t_micro', 2)
+            )
+            print(f"Loaded HRM Full Spatial solver (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)})")
+            is_heterogeneous = True
 
-        if is_hrm:
+        elif is_hrm:
             model = HRM(
                 input_dim=model_config['input_dim'],
                 hidden_dim=model_config['hidden_dim'],
