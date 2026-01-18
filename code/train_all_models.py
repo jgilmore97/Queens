@@ -53,18 +53,18 @@ def setup_directories():
     Path(RESULTS_DIR).mkdir(parents=True, exist_ok=True)
     for model_name in MODELS_TO_TRAIN:
         (Path(CHECKPOINT_BASE_DIR) / model_name).mkdir(parents=True, exist_ok=True)
-    print(f"✓ Directories created:")
-    print(f"  - Checkpoints: {CHECKPOINT_BASE_DIR}/")
-    print(f"  - Results: {RESULTS_DIR}/")
+    print(f"Directories created:")
+    print(f"- Checkpoints: {CHECKPOINT_BASE_DIR}/")
+    print(f"- Results: {RESULTS_DIR}/")
 
 def get_device():
     if torch.cuda.is_available():
         device = torch.device('cuda')
-        print(f"✓ Using GPU: {torch.cuda.get_device_name(0)}")
-        print(f"  GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
     else:
         device = torch.device('cpu')
-        print("⚠ Using CPU (training will be slower)")
+        print("Using CPU (training will be slower)")
     return device
 
 def create_config(model_name: str, model_type: str) -> Config:
@@ -101,10 +101,10 @@ def copy_best_checkpoint(model_name: str):
         if source_path != dest_path:
             import shutil
             shutil.copy2(source_path, dest_path)
-        print(f"✓ Checkpoint saved to {dest_path}")
+        print(f"Checkpoint saved to {dest_path}")
         return dest_path
     else:
-        print(f"⚠ No checkpoint found for {model_name}")
+        print(f"No checkpoint found for {model_name}")
         return None
 
 def plot_training_curves_from_checkpoints(model_names, save_path):
@@ -115,21 +115,21 @@ def plot_training_curves_from_checkpoints(model_names, save_path):
     for model_name in model_names:
         checkpoint_path = Path(CHECKPOINT_BASE_DIR) / model_name / 'best_model.pt'
         if not checkpoint_path.exists():
-            print(f"⚠ Checkpoint not found for {model_name}, skipping plot")
+            print(f"Checkpoint not found for {model_name}, skipping plot")
             continue
         try:
             checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
             metrics = checkpoint.get('metrics', {})
-            print(f"✓ Loaded metrics for {model_name}")
+            print(f"Loaded metrics for {model_name}")
         except Exception as e:
-            print(f"⚠ Could not load metrics for {model_name}: {e}")
+            print(f"Could not load metrics for {model_name}: {e}")
     fig.text(0.5, 0.02,
              'Note: Training curves require W&B logging or modified checkpoint saving.\n'
              'Run compare_models.py for comprehensive evaluation.',
              ha='center', fontsize=10, style='italic', color='gray')
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    print(f"✓ Saved placeholder plot to {save_path}")
+    print(f"Saved placeholder plot to {save_path}")
     plt.close()
 
 def train_gat_model(device):
@@ -144,7 +144,7 @@ def train_gat_model(device):
         dropout=config.model.dropout,
         heads=config.model.gat_heads
     )
-    print(f"✓ Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     train_loader, val_loader = get_homogeneous_loaders(
         config.data.train_json,
         batch_size=config.training.batch_size,
@@ -154,15 +154,15 @@ def train_gat_model(device):
         pin_memory=True,
         shuffle_train=True,
     )
-    print(f"✓ Train samples: {len(train_loader.dataset):,}")
-    print(f"✓ Val samples: {len(val_loader.dataset):,}")
+    print(f"Train samples: {len(train_loader.dataset):,}")
+    print(f"Val samples: {len(val_loader.dataset):,}")
     print(f"\nTraining for {config.training.epochs} epochs...")
     if DISABLE_WANDB:
         os.environ['WANDB_MODE'] = 'disabled'
     model, best_f1 = run_training_with_tracking(
         model, train_loader, val_loader, config
     )
-    print(f"\n✓ GAT Training Complete! Best F1: {best_f1:.4f}")
+    print(f"\nGAT Training Complete! Best F1: {best_f1:.4f}")
     copy_best_checkpoint('gat')
     return model
 
@@ -180,8 +180,8 @@ def train_hetero_gat_model(device):
         hgt_heads=config.model.hgt_heads,
         use_batch_norm=True
     )
-    print(f"✓ Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-    print("✓ Edge types: line_constraint, region_constraint, diagonal_constraint")
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print("Edge types: line_constraint, region_constraint, diagonal_constraint")
     train_loader, val_loader = get_queens_loaders(
         config.data.train_json,
         batch_size=config.training.batch_size,
@@ -191,15 +191,15 @@ def train_hetero_gat_model(device):
         pin_memory=True,
         shuffle_train=True,
     )
-    print(f"✓ Train samples: {len(train_loader.dataset):,}")
-    print(f"✓ Val samples: {len(val_loader.dataset):,}")
+    print(f"Train samples: {len(train_loader.dataset):,}")
+    print(f"Val samples: {len(val_loader.dataset):,}")
     print(f"\nTraining for {config.training.epochs} epochs...")
     if DISABLE_WANDB:
         os.environ['WANDB_MODE'] = 'disabled'
     model, best_f1 = run_training_with_tracking_hetero(
         model, train_loader, val_loader, config
     )
-    print(f"\n✓ HeteroGAT Training Complete! Best F1: {best_f1:.4f}")
+    print(f"\nHeteroGAT Training Complete! Best F1: {best_f1:.4f}")
     copy_best_checkpoint('hetero_gat')
     return model
 
@@ -219,9 +219,9 @@ def train_hrm_model(device):
         t_micro=config.model.t_micro,
         use_input_injection=config.model.use_input_injection,
     )
-    print(f"✓ Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-    print(f"✓ HRM Config: {config.model.n_cycles} cycles, {config.model.t_micro} micro-steps")
-    print("✓ Edge types: line_constraint, region_constraint, diagonal_constraint")
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"HRM Config: {config.model.n_cycles} cycles, {config.model.t_micro} micro-steps")
+    print("Edge types: line_constraint, region_constraint, diagonal_constraint")
     train_loader, val_loader = get_queens_loaders(
         config.data.train_json,
         batch_size=config.training.batch_size,
@@ -231,15 +231,15 @@ def train_hrm_model(device):
         pin_memory=True,
         shuffle_train=True,
     )
-    print(f"✓ Train samples: {len(train_loader.dataset):,}")
-    print(f"✓ Val samples: {len(val_loader.dataset):,}")
+    print(f"Train samples: {len(train_loader.dataset):,}")
+    print(f"Val samples: {len(val_loader.dataset):,}")
     print(f"\nTraining for {config.training.epochs} epochs...")
     if DISABLE_WANDB:
         os.environ['WANDB_MODE'] = 'disabled'
     model, best_f1 = run_training_with_tracking_hetero(
         model, train_loader, val_loader, config
     )
-    print(f"\n✓ HRM Training Complete! Best F1: {best_f1:.4f}")
+    print(f"\nHRM Training Complete! Best F1: {best_f1:.4f}")
     copy_best_checkpoint('hrm')
     return model
 
@@ -277,16 +277,16 @@ def main():
             elif model_name == 'hrm':
                 model = train_hrm_model(device)
             else:
-                print(f"⚠ Unknown model: {model_name}, skipping...")
+                print(f"Unknown model: {model_name}, skipping...")
                 continue
             model_time = time.time() - model_start_time
             training_results[model_name] = {
                 'training_time': model_time,
                 'status': 'completed'
             }
-            print(f"\n✓ {model_name.upper()} completed in {model_time/60:.1f} minutes\n")
+            print(f"\n{model_name.upper()} completed in {model_time/60:.1f} minutes\n")
         except Exception as e:
-            print(f"\n⚠ Error training {model_name}: {e}")
+            print(f"\nError training {model_name}: {e}")
             import traceback
             traceback.print_exc()
             training_results[model_name] = {
@@ -312,13 +312,13 @@ def main():
     print("="*70)
     print(f"Total training time: {total_time/60:.1f} minutes ({total_time/3600:.2f} hours)")
     print(f"\nResults saved to:")
-    print(f"  - {summary_path}")
+    print(f"- {summary_path}")
     print(f"\nCheckpoints saved to:")
     for model_name in MODELS_TO_TRAIN:
         if training_results.get(model_name, {}).get('status') == 'completed':
             ckpt_path = Path(CHECKPOINT_BASE_DIR) / model_name / 'best_model.pt'
             if ckpt_path.exists():
-                print(f"  - {ckpt_path}")
+                print(f"- {ckpt_path}")
     print("\n" + "="*70)
     print("\nNext step: Run 'python compare_models.py' to evaluate all models")
     print("="*70)

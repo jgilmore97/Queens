@@ -90,7 +90,6 @@ def process_puzzle_images(
 
     dataset = []
 
-    # Initialize with properly formatted seed entries for consistent format
     for seed in seed_dataset:
         seed_entry = {
             "region": seed["region"],

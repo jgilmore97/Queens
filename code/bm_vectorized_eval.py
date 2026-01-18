@@ -21,20 +21,16 @@ class BenchmarkStep0Dataset(BenchmarkDataset):
         e = self.records[idx]
         region = np.asarray(e["region"], dtype=np.int64)
 
-        # Pad region and queen_board
         region_padded = self.pad(region, target_size=self.max_regions, pad_with=-1)
         queen_padded = self.pad(queen_board.astype(np.int64), target_size=self.max_regions, pad_with=0)
 
-        # Normalized coordinates
         coords = np.indices((self.max_regions, self.max_regions)).reshape(2, -1).T.astype(np.float32) / (self.max_regions - 1)
 
-        # Region one-hot
         reg_onehot = np.zeros((self.max_regions * self.max_regions, self.max_regions), dtype=np.float32)
         flat_ids = region_padded.flatten()
         valid_mask = flat_ids != -1
         reg_onehot[np.arange(self.max_regions * self.max_regions)[valid_mask], flat_ids[valid_mask]] = 1.0
 
-        # Has queen indicator
         has_q = queen_padded.flatten()[:, None].astype(np.float32)
 
         x = np.hstack([coords, reg_onehot, has_q])
@@ -149,7 +145,6 @@ def _evaluate_batch(
 
     solved_count = still_correct.sum().item()
 
-    # Collect error distribution
     error_by_step = {}
     for step in range(max_steps):
         count = (first_error_step == step).sum().item()
@@ -174,4 +169,4 @@ def print_results(results: Dict) -> None:
         for step in sorted(results['error_by_step'].keys()):
             count = results['error_by_step'][step]
             pct = count / failed if failed > 0 else 0
-            print(f"  Step {step}: {count} errors ({pct:.1%} of failures)")
+            print(f"Step {step}: {count} errors ({pct:.1%} of failures)")

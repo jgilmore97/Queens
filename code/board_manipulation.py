@@ -101,7 +101,7 @@ def quantize_rgb_tensor(rgb_tensor, threshold=30):
     color_map = {}
     next_label = 0
     n = rgb_tensor.shape[0]
-    int_tensor = np.zeros((n, n), dtype=int)  # [n, n]
+    int_tensor = np.zeros((n, n), dtype=int)  
 
     for row in range(n):
         for col in range(n):
@@ -128,7 +128,7 @@ def extract(filepath, threshold=30):
 
 def solve_queens(region):
     """Solve the queens puzzle using backtracking. Returns (positions, board) or (None, None) if unsolvable."""
-    region = np.asarray(region)  # [n, n]
+    region = np.asarray(region)  
     n, m = region.shape
     assert n == m, "Board must be square"
 
@@ -158,7 +158,7 @@ def solve_queens(region):
         return False
 
     if backtrack(0):
-        board = np.zeros((n, n), dtype=int)  # [n, n]
+        board = np.zeros((n, n), dtype=int)  
         for r, c in positions:
             board[r, c] = 1
         return positions, board
@@ -247,7 +247,7 @@ def mutate_region_frontier(board, max_attempts=100):
 
 def count_solutions(region, max_solutions=None):
     """Count valid queen solutions for a board, optionally stopping early at max_solutions."""
-    region = np.asarray(region)  # [n, n]
+    region = np.asarray(region)  
     n, m = region.shape
     assert n == m, "Board must be square"
 
@@ -322,17 +322,17 @@ def hash_board(region):
 
 def expand_board_dataset(seed_dataset, target_size=5000):
     """Expand seed dataset via region-mutation until target_size boards exist."""
-    generated_dataset   = []
-    offspring_counter   = Counter()
-    fail_streak         = defaultdict(int)
-    seen_hashes         = set()
+    generated_dataset = []
+    offspring_counter = Counter()
+    fail_streak = defaultdict(int)
+    seen_hashes = set()
 
     available_pool = deque()
     for seed in seed_dataset:
         seed_entry = {
-            "region"     : seed["region"],
-            "iteration"  : 0,
-            "source"     : seed.get("filename", "unknown")
+            "region": seed["region"],
+            "iteration": 0,
+            "source": seed.get("filename", "unknown")
         }
         available_pool.append(seed_entry)
         seen_hashes.add(hash_board(seed["region"]))
@@ -344,13 +344,13 @@ def expand_board_dataset(seed_dataset, target_size=5000):
         print(f"Generated so far: {len(generated_dataset)}")
         print(f"Attempting {len(available_pool)} mutations...")
 
-        successes   = 0
-        next_pool   = deque()
+        successes = 0
+        next_pool = deque()
 
         for entry in tqdm(list(available_pool), desc=f"Mutating (Round {round_count})"):
-            base_region   = entry["region"]
-            root_source   = entry["source"]
-            parent_iter   = entry["iteration"]
+            base_region = entry["region"]
+            root_source = entry["source"]
+            parent_iter = entry["iteration"]
 
             try:
                 new_region = generate_unique_mutated_board(base_region)
@@ -373,11 +373,11 @@ def expand_board_dataset(seed_dataset, target_size=5000):
                 positions, label_board = solve_queens(new_region)
 
                 child_board = {
-                    "region"          : new_region,
-                    "queen_positions" : positions,
-                    "label_board"     : label_board,
-                    "source"          : root_source,
-                    "iteration"       : parent_iter + 1
+                    "region": new_region,
+                    "queen_positions": positions,
+                    "label_board": label_board,
+                    "source": root_source,
+                    "iteration": parent_iter + 1
                 }
 
                 generated_dataset.append(child_board)
@@ -402,7 +402,7 @@ def expand_board_dataset(seed_dataset, target_size=5000):
     print(f"\n Finished: {len(generated_dataset)} boards generated.\n")
     print("Offspring per seed:")
     for seed, count in offspring_counter.items():
-        print(f"  {seed}: {count}")
+        print(f"{seed}: {count}")
 
     return generated_dataset, offspring_counter
 
@@ -540,11 +540,11 @@ def save_state_dataset_to_json(dataset, filename="queens_training_data.json"):
 
 def visualize_queens_board_with_queens(example: dict, title: str = "Queens Board with Queens", show_labels = False) -> None:
     """Visualize a training example with queens overlaid on the colored region board."""
-    region_board = np.array(example['region'])  # [n, n]
+    region_board = np.array(example['region'])  
     if not show_labels:
-        queen_board = np.array(example['partial_board'])  # [n, n]
+        queen_board = np.array(example['partial_board'])  
     else:
-        queen_board = np.array(example['label_board'])  # [n, n]
+        queen_board = np.array(example['label_board'])  
     n = region_board.shape[0]
 
     assert region_board.shape == queen_board.shape, "Board shape mismatch."

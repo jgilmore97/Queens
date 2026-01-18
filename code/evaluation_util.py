@@ -94,7 +94,6 @@ def evaluate_full_puzzle_capability(
 
             try:
                 with torch.no_grad():
-                    # Check if solver uses heterogeneous or homogeneous format
                     if hasattr(solver, 'is_heterogeneous') and not solver.is_heterogeneous:
                         # Homogeneous GAT: combine all edge types
                         edge_indices = []
@@ -129,7 +128,6 @@ def evaluate_full_puzzle_capability(
             top_idx = np.argmax(flat_logits)
             top_row, top_col = top_idx // n, top_idx % n
 
-            # Find positions that haven't been placed yet
             remaining_correct = [pos for pos in correct_positions if queen_board[pos[0], pos[1]] == 0]
 
             is_correct = (top_row, top_col) in remaining_correct
@@ -146,7 +144,7 @@ def evaluate_full_puzzle_capability(
                     "first_error_step": step
                 })
 
-                break  # Stop on first error
+                break 
 
             queen_board[top_row, top_col] = 1
 
@@ -175,7 +173,7 @@ def evaluate_full_puzzle_capability(
             for step in sorted(stats["error_by_step"].keys()):
                 count = stats["error_by_step"][step]
                 pct = count / stats["failed_solves"] if stats["failed_solves"] > 0 else 0
-                print(f"  Step {step}: {count} errors ({pct:.1%} of all errors)")
+                print(f"Step {step}: {count} errors ({pct:.1%} of all errors)")
 
         print("\nPerformance by board size:")
         for size in sorted(stats["error_by_board_size"].keys()):
@@ -183,6 +181,6 @@ def evaluate_full_puzzle_capability(
             success = data["total"] - data["errors"]
             total = data["total"]
             success_rate = success / total if total > 0 else 0
-            print(f"  {size}x{size}: {success}/{total} successful ({success_rate:.1%})")
+            print(f"{size}x{size}: {success}/{total} successful ({success_rate:.1%})")
 
     return stats

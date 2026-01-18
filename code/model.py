@@ -75,7 +75,6 @@ class HeteroGAT(nn.Module):
                  use_batch_norm=True, input_injection_layers=None):
         super().__init__()
 
-        # Each GAT head outputs hidden_dim // gat_heads channels; concatenated = hidden_dim
         gat_head_dim = hidden_dim // gat_heads
         assert hidden_dim % gat_heads == 0, "hidden_dim must be divisible by gat_heads"
 
@@ -189,7 +188,7 @@ class HeteroGAT(nn.Module):
             if self.use_batch_norm:
                 x_dict_new = {key: self.batch_norms[i](x) for key, x in x_dict_new.items()}
 
-            # Input injection: re-inject projected original features to preserve signal
+            # Re-inject projected original features to preserve signal
             if layer_idx in self.input_injection_layers:
                 projected_input = self.input_projections[str(layer_idx)](original_input)
                 x_dict_new['cell'] = x_dict_new['cell'] + projected_input
@@ -212,7 +211,6 @@ class HeteroGAT(nn.Module):
                 }
                 x_dict = {key: self.dropout(x) for key, x in x_dict.items()}
 
-        # Final global context refinement
         x_dict_final_global = self.final_graphformer(x_dict, edge_index_dict)
         if self.use_batch_norm:
             x_dict_final_global = {key: self.bn_final_graphformer(x) for key, x in x_dict_final_global.items()}
@@ -635,6 +633,7 @@ class HRM(nn.Module):
 
         return logits
     
+# Full Spatial
 class _LBlockSpatial(nn.Module):
     def __init__(
         self,
