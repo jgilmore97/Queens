@@ -33,10 +33,10 @@ BATCH_SIZE = 256
 def get_device():
     if torch.cuda.is_available():
         device = torch.device('cuda')
-        print(f"✓ Using GPU: {torch.cuda.get_device_name(0)}")
+        print(f"Using GPU: {torch.cuda.get_device_name(0)}")
     else:
         device = torch.device('cpu')
-        print("⚠ Using CPU")
+        print("Using CPU")
     return device
 
 def load_model_checkpoint(model_name: str, device):
@@ -83,7 +83,7 @@ def load_model_checkpoint(model_name: str, device):
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to(device)
     model.eval()
-    print(f"✓ Loaded {model_name.upper()} from {checkpoint_path}")
+    print(f"Loaded {model_name.upper()} from {checkpoint_path}")
     return model, is_heterogeneous, config_dict
 
 def evaluate_single_step(model, model_name: str, is_heterogeneous: bool, device) -> Dict[str, Any]:
@@ -158,9 +158,9 @@ def evaluate_single_step(model, model_name: str, is_heterogeneous: bool, device)
         'top3_accuracy': top3_acc,
     }
     print(f"\nResults:")
-    print(f"  Top-1 Accuracy: {top1_acc:.1%}")
-    print(f"  Top-2 Accuracy: {top2_acc:.1%}")
-    print(f"  Top-3 Accuracy: {top3_acc:.1%}")
+    print(f"Top-1 Accuracy: {top1_acc:.1%}")
+    print(f"Top-2 Accuracy: {top2_acc:.1%}")
+    print(f"Top-3 Accuracy: {top3_acc:.1%}")
     return results
 
 def get_batch_indices_hetero(batch):
@@ -271,7 +271,7 @@ def plot_comparison(all_results: Dict[str, Dict], save_path: Path):
     ax4.grid(True, alpha=0.3, axis='y')
     ax4.set_ylim([0, 105])
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    print(f"\n✓ Saved comparison plots to {save_path}")
+    print(f"\nSaved comparison plots to {save_path}")
     plt.close()
 
 def save_text_summary(all_results: Dict[str, Dict], save_path: Path):
@@ -324,7 +324,7 @@ def save_text_summary(all_results: Dict[str, Dict], save_path: Path):
                     success = total - errors
                     rate = success / total if total > 0 else 0
                     f.write(f"{model_name.upper():<15} {success:>3}/{total:<15} {rate:>8.1%}\n")
-    print(f"✓ Saved text summary to {save_path}")
+    print(f"Saved text summary to {save_path}")
 
 def main():
     print("\n" + "="*70)
@@ -353,7 +353,7 @@ def main():
             results['full_solve'] = full_solve_results
             all_results[model_name] = results
         except Exception as e:
-            print(f"⚠ Error evaluating {model_name}: {e}")
+            print(f"Error evaluating {model_name}: {e}")
             import traceback
             traceback.print_exc()
             continue
@@ -370,7 +370,7 @@ def main():
                     }
                 }
                 json.dump(serializable_results, f, indent=2, default=str)
-        print(f"\n✓ Saved JSON report to {json_path}")
+        print(f"\nSaved JSON report to {json_path}")
         plot_path = Path(RESULTS_DIR) / 'comparison_plots.png'
         plot_comparison(all_results, plot_path)
         summary_path = Path(RESULTS_DIR) / 'comparison_summary.txt'
@@ -379,9 +379,9 @@ def main():
         print("COMPARISON COMPLETE!")
         print("="*70)
         print(f"\nResults saved to:")
-        print(f"  - {json_path}")
-        print(f"  - {plot_path}")
-        print(f"  - {summary_path}")
+        print(f"- {json_path}")
+        print(f"- {plot_path}")
+        print(f"- {summary_path}")
         print("\n" + "="*70)
 
 if __name__ == "__main__":

@@ -148,7 +148,7 @@ def objective(
 
         for epoch in range(1, num_epochs + 1):
             metrics = train_epoch_simple(model, train_loader, criterion, optimizer, device, epoch)
-            print(f"  Epoch {epoch}: loss={metrics['loss']:.4f}")
+            print(f"Epoch {epoch}: loss={metrics['loss']:.4f}")
 
         eval_results = evaluate_solve_rate(
             model,
@@ -159,7 +159,7 @@ def objective(
             seed=seed,
         )
         final_solve_rate = eval_results['solve_rate']
-        print(f"  Final solve_rate: {final_solve_rate:.4f}")
+        print(f"Final solve_rate: {final_solve_rate:.4f}")
 
         trial.set_user_attr('final_solve_rate', final_solve_rate)
         trial.set_user_attr('param_count', param_count)
@@ -174,14 +174,14 @@ def objective(
 
     except RuntimeError as e:
         if "out of memory" in str(e).lower():
-            print(f"  Trial {trial.number} OOM")
+            print(f"Trial {trial.number} OOM")
             torch.cuda.empty_cache()
             trial.set_user_attr('status', 'oom')
             return 0.0
         raise
 
     except Exception as e:
-        print(f"  Trial {trial.number} failed: {e}")
+        print(f"Trial {trial.number} failed: {e}")
         traceback.print_exc()
         trial.set_user_attr('status', f'error: {str(e)[:50]}')
         return 0.0

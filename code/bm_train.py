@@ -66,17 +66,14 @@ def train_epoch(
         logits = model(x)
         logits = logits.squeeze(-1)
 
-        # Create valid mask (exclude padded positions with y=-1)
         valid_mask = y >= 0
         valid_logits = logits[valid_mask]
         valid_y = y[valid_mask]
 
-        # Compute loss only on valid positions
         loss = criterion(valid_logits, valid_y.float())
         loss.backward()
         optimizer.step()
 
-        # Compute metrics only on valid positions
         preds = (valid_logits > 0).long()
         batch_correct = (preds == valid_y).sum().item()
         batch_TP = ((preds == 1) & (valid_y == 1)).sum().item()
@@ -92,7 +89,6 @@ def train_epoch(
         total_loss += loss.item() * num_valid
         total_nodes += num_valid
 
-        # Top-1 metrics
         top1_correct, top1_predictions,  = calculate_top1_metrics(logits, y)
         total_top1_correct += top1_correct
         total_top1_predictions += top1_predictions
@@ -147,15 +143,12 @@ def evaluate_epoch(
         logits = model(x)
         logits = logits.squeeze(-1)
 
-        # Create valid mask (exclude padded positions with y=-1)
         valid_mask = y >= 0
         valid_logits = logits[valid_mask]
         valid_y = y[valid_mask]
 
-        # Compute loss only on valid positions
         loss = criterion(valid_logits, valid_y.float())
 
-        # Compute metrics only on valid positions
         preds = (valid_logits > 0).long()
         batch_correct = (preds == valid_y).sum().item()
         batch_TP = ((preds == 1) & (valid_y == 1)).sum().item()
@@ -171,7 +164,6 @@ def evaluate_epoch(
         total_loss += loss.item() * num_valid
         total_nodes += num_valid
 
-        # Top-1 metrics
         top1_correct, top1_predictions = calculate_top1_metrics(logits, y)
         total_top1_correct += top1_correct
         total_top1_predictions += top1_predictions
@@ -208,7 +200,6 @@ def benchmark_training(
     val_loader: torch.utils.data.DataLoader,
     config: Config
 ):
-    # Set seeds for reproducibility
     set_seed(config.data.seed)
 
     tracker = ExperimentTracker(config)

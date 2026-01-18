@@ -40,25 +40,25 @@ def print_summary(study: optuna.Study):
     print("HYPERPARAMETER SWEEP SUMMARY")
     print("=" * 60)
     print(f"Total trials: {len(study.trials)}")
-    print(f"  Completed: {len(completed)}")
-    print(f"  Pruned: {len(pruned)}")
-    print(f"  Failed: {len(failed)}")
+    print(f"Completed: {len(completed)}")
+    print(f"Pruned: {len(pruned)}")
+    print(f"Failed: {len(failed)}")
 
     if completed:
         best_trial = study.best_trial
         print(f"\nBest trial: #{best_trial.number}")
-        print(f"  Solve rate: {best_trial.value:.4f}")
-        print(f"  Parameters:")
+        print(f"Solve rate: {best_trial.value:.4f}")
+        print(f"Parameters:")
         for key, value in best_trial.params.items():
             if isinstance(value, float):
-                print(f"    {key}: {value:.6g}")
+                print(f"  {key}: {value:.6g}")
             else:
-                print(f"    {key}: {value}")
+                print(f"  {key}: {value}")
 
         sorted_trials = sorted(completed, key=lambda t: t.value or 0, reverse=True)
         print(f"\nTop 5 trials:")
         for i, trial in enumerate(sorted_trials[:5], 1):
-            print(f"  {i}. Trial #{trial.number}: solve_rate={trial.value:.4f}")
+            print(f"{i}. Trial #{trial.number}: solve_rate={trial.value:.4f}")
 
 
 def main():

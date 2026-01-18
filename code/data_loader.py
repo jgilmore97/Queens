@@ -18,11 +18,9 @@ from torch.utils.data import Dataset as vanillaDataset, DataLoader as vanillaDat
 # Edge index cache: maps region hash -> edge index dict
 _edge_index_cache: Dict[str, Dict[str, torch.Tensor]] = {}
 
-
 def _region_hash(region: np.ndarray) -> str:
     """Create a hash key from the region array."""
     return hashlib.md5(region.tobytes()).hexdigest()
-
 
 def build_heterogeneous_edge_index(region: np.ndarray) -> Dict[str, torch.Tensor]:
     """Return dictionary of edge_index tensors for each constraint type.
@@ -87,7 +85,6 @@ def build_heterogeneous_edge_index(region: np.ndarray) -> Dict[str, torch.Tensor
 
     return hetero_edge_index
 
-
 def build_heterogeneous_edge_index_cached(region: np.ndarray) -> Dict[str, torch.Tensor]:
     """Cached version of build_heterogeneous_edge_index.
 
@@ -99,7 +96,6 @@ def build_heterogeneous_edge_index_cached(region: np.ndarray) -> Dict[str, torch
         _edge_index_cache[key] = build_heterogeneous_edge_index(region)
 
     return _edge_index_cache[key]
-
 
 def clear_edge_index_cache() -> int:
     """Clear the edge index cache and return number of entries removed."""
@@ -162,14 +158,14 @@ class QueensDataset(Dataset):
 
         super().__init__(None, transform, pre_transform)
 
-        self.json_path   = Path(json_path).expanduser()
-        self.val_ratio   = val_ratio
-        self.seed        = seed
+        self.json_path = Path(json_path).expanduser()
+        self.val_ratio = val_ratio
+        self.seed = seed
 
         key = (self.json_path, val_ratio, seed)
         if key not in self._cache:
-            records          = json.loads(self.json_path.read_text())
-            train, val       = _split_by_img(records, val_ratio, seed)
+            records = json.loads(self.json_path.read_text())
+            train, val = _split_by_img(records, val_ratio, seed)
             self._cache[key] = (train, val)
 
         train_set, val_set = self._cache[key]
@@ -188,26 +184,26 @@ class QueensDataset(Dataset):
     def get(self, idx: int) -> HeteroData:
         e = self.records[idx]
 
-        region = np.asarray(e["region"], dtype=np.int64)   # (n, n)
+        region = np.asarray(e["region"], dtype=np.int64) # (n, n)
         if "partial_board" not in e:
-            partial = np.zeros_like(region, dtype=np.int64)      # (n, n)
+            partial = np.zeros_like(region, dtype=np.int64) # (n, n)
         else:
-            partial = np.asarray(e["partial_board"], dtype=np.int64)   # (n, n)
-        label = np.asarray(e["label_board"],   dtype=np.int64)   # (n, n)
+            partial = np.asarray(e["partial_board"], dtype=np.int64) # (n, n)
+        label = np.asarray(e["label_board"],   dtype=np.int64) # (n, n)
         n = region.shape[0]
         N2 = n * n
 
-        coords = np.indices((n, n)).reshape(2, -1).T.astype(np.float32) / (n - 1)  # (N², 2)
+        coords = np.indices((n, n)).reshape(2, -1).T.astype(np.float32) / (n - 1) # (N², 2)
 
         reg_onehot = np.zeros((N2, self.max_regions), dtype=np.float32)
         flat_ids = region.flatten()
-        reg_onehot[np.arange(N2), flat_ids] = 1.0                                  # (N², R)
+        reg_onehot[np.arange(N2), flat_ids] = 1.0 # (N², R)
 
-        has_q = partial.flatten()[:, None].astype(np.float32)                      # (N², 1)
+        has_q = partial.flatten()[:, None].astype(np.float32) # (N², 1)
 
-        x = torch.from_numpy(np.hstack([coords, reg_onehot, has_q]))               # (N², 3+R)
+        x = torch.from_numpy(np.hstack([coords, reg_onehot, has_q])) # (N², 3+R)
 
-        y = torch.from_numpy(label.flatten().astype(np.int64))                     # (N²,)
+        y = torch.from_numpy(label.flatten().astype(np.int64)) # (N²,)
 
         hetero_edge_index = build_heterogeneous_edge_index_cached(region)
 
@@ -318,7 +314,7 @@ def get_queens_loaders(
         val_sampler = SizeBucketBatchSampler(ds_val, batch_size=batch_size, shuffle=False, drop_last=False)
 
         train_loader = DataLoader(ds_train, batch_sampler = train_sampler, **kwargs)
-        val_loader   = DataLoader(ds_val, batch_sampler = val_sampler, **kwargs)
+        val_loader = DataLoader(ds_val, batch_sampler = val_sampler, **kwargs)
     
     else:
         train_loader = DataLoader(ds_train, shuffle=shuffle_train, batch_size = batch_size, **kwargs)
@@ -373,10 +369,10 @@ def get_combined_queens_loaders(
     combined_val = ConcatDataset([ds_multistate_val, ds_state0_val])
     
     print(f"Combined dataset created:")
-    print(f"  Multi-state train: {len(ds_multistate_train):,}")
-    print(f"  State-0 train: {len(ds_state0_train):,}")
-    print(f"  Total train: {len(combined_train):,}")
-    print(f"  Total val: {len(combined_val):,}")
+    print(f"Multi-state train: {len(ds_multistate_train):,}")
+    print(f"State-0 train: {len(ds_state0_train):,}")
+    print(f"Total train: {len(combined_train):,}")
+    print(f"Total val: {len(combined_val):,}")
     
     kwargs = dict(
         num_workers=num_workers,
@@ -389,7 +385,7 @@ def get_combined_queens_loaders(
         val_sampler = SizeBucketBatchSampler(combined_val, batch_size=batch_size, shuffle=False, drop_last=False)
 
         train_loader = DataLoader(combined_train, batch_sampler = train_sampler, **kwargs)
-        val_loader   = DataLoader(combined_val, batch_sampler = val_sampler, **kwargs)
+        val_loader = DataLoader(combined_val, batch_sampler = val_sampler, **kwargs)
     else:
         train_loader = DataLoader(combined_train, shuffle=shuffle_train, batch_size=batch_size, **kwargs)
         val_loader = DataLoader(combined_val, shuffle=False, batch_size=batch_size, **kwargs)
@@ -414,9 +410,9 @@ class MixedDataset(Dataset):
         self._len = min(len(dataset1), len(dataset2))
 
         print(f"MixedDataset created:")
-        print(f"  Dataset1 (state-0): {len(dataset1)} samples ({ratio1:.1%} sampling)")
-        print(f"  Dataset2 (old filtered): {len(dataset2)} samples ({1-ratio1:.1%} sampling)")
-        print(f"  Epoch length: {self._len}")
+        print(f"Dataset1 (state-0): {len(dataset1)} samples ({ratio1:.1%} sampling)")
+        print(f"Dataset2 (old filtered): {len(dataset2)} samples ({1-ratio1:.1%} sampling)")
+        print(f"Epoch length: {self._len}")
 
     def _shuffle_pools(self):
         """Shuffle both remaining pools using seeded RNG."""
@@ -647,11 +643,11 @@ class BenchmarkDataset(vanillaDataset):
     def __getitem__(self, idx: int) -> dict:
         e = self.records[idx]
 
-        region  = np.asarray(e["region"],        dtype=np.int64)   # (n, n)
+        region = np.asarray(e["region"],        dtype=np.int64)   # (n, n)
         partial = np.asarray(e["partial_board"], dtype=np.int64)   # (n, n)
-        label   = np.asarray(e["label_board"],   dtype=np.int64)   # (n, n)
-        n       = region.shape[0]
-        N2      = n * n 
+        label = np.asarray(e["label_board"],   dtype=np.int64)   # (n, n)
+        n = region.shape[0]
+        N2 = n * n 
 
         #padding region to max size
         region_padded = self.pad(region, target_size=11, pad_with=-1)
@@ -672,8 +668,8 @@ class BenchmarkDataset(vanillaDataset):
         y = label_padded.flatten().astype(np.int64) # (N²,)
 
         sample = {
-            "x": torch.from_numpy(x),               # (N², 2+R+1)
-            "y": torch.from_numpy(y),               # (N²,)
+            "x": torch.from_numpy(x), # (N², 2+R+1)
+            "y": torch.from_numpy(y), # (N²,)
             "n": n,
             "meta": dict(source=e["source"], iteration=e["iteration"])
         }

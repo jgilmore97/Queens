@@ -530,7 +530,6 @@ def create_scheduler(optimizer, config):
     elif config.training.scheduler_type != "cosine":
         raise ValueError(f"Unknown scheduler type: {config.training.scheduler_type}")
     
-    # Cosine schedule with optional warmup and constant tail
     schedulers = []
     milestones = []
     
@@ -658,11 +657,6 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
                 current_dataset = "mixed (75% state-0, 25% old)"
                 switched = True
 
-                # Halve learning rate
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] /= 2
-                print(f"Divided learning rate by 2. Now: {optimizer.param_groups[0]['lr']:.1e}")
-
                 print(f"Mixed train samples: {len(mixed_dataset):,}")
                 print(f"State-0 val samples: {len(state0_val_dataset):,}")
 
@@ -736,7 +730,7 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
         print(f"\nTraining completed!")
         print(f"Best validation F1: {best_val_f1:.4f} (epoch {best_epoch})")
         print(f"Best validation Top-1 Accuracy: {best_val_top1:.4f} (epoch {best_top1_epoch})")
-        print(f"📊 Key insight: Top-1 accuracy shows how well argmax(logits) performs")
+        print(f"Key insight: Top-1 accuracy shows how well argmax(logits) performs")
 
         return model, best_val_f1
 
@@ -781,7 +775,7 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
         print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
         print(f"Scheduler: {config.training.scheduler_type}")
         if config.training.scheduler_type == "cosine":
-            print(f"  T_max: {config.training.cosine_t_max}, eta_min: {config.training.cosine_eta_min:.1e}")
+            print(f"T_max: {config.training.cosine_t_max}, eta_min: {config.training.cosine_eta_min:.1e}")
         print(f"Train samples: {len(train_loader.dataset):,}")
         print(f"Val samples: {len(val_loader.dataset):,}")
 
