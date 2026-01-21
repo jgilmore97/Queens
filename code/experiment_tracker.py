@@ -234,15 +234,11 @@ class ExperimentTracker:
 
                 try:
                     if hasattr(batch, '__getitem__') and 'cell' in batch:
-                        x_dict = {'cell': batch['cell'].x}
-                        edge_index_dict = {
-                            ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
-                            ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
-                            ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
-                        }
-                        logits = model(x_dict, edge_index_dict)
+                        # HeteroGAT or HRM models that accept batch directly
+                        logits = model(batch)
                         labels = batch['cell'].y
                     else:
+                        # Homogeneous GAT models
                         logits = model(batch.x, batch.edge_index)
                         labels = batch.y
 

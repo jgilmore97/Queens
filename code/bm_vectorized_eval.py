@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
 from data_loader import BenchmarkDataset
 
@@ -53,18 +53,20 @@ def evaluate_solve_rate(
     total_puzzles = 0
     solved_puzzles = 0
     error_by_step = {}
+    failed_puzzles = []
 
     with torch.no_grad():
         for batch_start in range(0, len(dataset), batch_size):
             batch_end = min(batch_start + batch_size, len(dataset))
             batch_indices = list(range(batch_start, batch_end))
 
-            batch_solved, batch_total, batch_errors = _evaluate_batch(
+            batch_solved, batch_total, batch_errors, batch_failures = _evaluate_batch(
                 model, dataset, batch_indices, device, max_size
             )
 
             solved_puzzles += batch_solved
             total_puzzles += batch_total
+            failed_puzzles.extend(batch_failures)
 
             for step, count in batch_errors.items():
                 error_by_step[step] = error_by_step.get(step, 0) + count
@@ -75,7 +77,8 @@ def evaluate_solve_rate(
         'solve_rate': solve_rate,
         'total_puzzles': total_puzzles,
         'solved_puzzles': solved_puzzles,
-        'error_by_step': error_by_step
+        'error_by_step': error_by_step,
+        'failed_puzzles': failed_puzzles
     }
 
 
@@ -85,7 +88,7 @@ def _evaluate_batch(
     batch_indices: list,
     device: str,
     max_size: int = 11
-) -> Tuple[int, int, Dict[int, int]]:
+) -> Tuple[int, int, Dict[int, int], List[Dict]]:
     num_puzzles = len(batch_indices)
 
     board_sizes = []
@@ -151,7 +154,21 @@ def _evaluate_batch(
         if count > 0:
             error_by_step[step] = count
 
-    return solved_count, num_puzzles, error_by_step
+    failed_puzzles = []
+    failed_mask = ~still_correct
+    failed_indices = torch.where(failed_mask)[0].cpu().tolist()
+
+    for local_idx in failed_indices:
+        dataset_idx = batch_indices[local_idx]
+        record = dataset.records[dataset_idx]
+
+        failed_puzzles.append({
+            'source': record.get('source', f'puzzle_{dataset_idx}'),
+            'board_size': len(record['region']),
+            'first_error_step': first_error_step[local_idx].item()
+        })
+
+    return solved_count, num_puzzles, error_by_step, failed_puzzles
 
 
 def print_results(results: Dict) -> None:

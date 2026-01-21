@@ -17,7 +17,7 @@ from data_loader import (
     get_combined_queens_loaders,
 )
 from config import Config
-from model import GAT, HeteroGAT, HRM
+from model import GAT, HeteroGAT, HRM, HRM_FullSpatial
 from vectorized_eval import evaluate_solve_rate
 
 
@@ -218,20 +218,10 @@ def train_epoch_hetero(model, loader, criterion, optimizer, device, epoch, use_a
 
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=use_amp):
             logits = model(batch)
+
             labels = batch['cell'].y
             num_nodes = batch['cell'].num_nodes
             loss = criterion(logits, labels.float())
-
-        # else:
-        #     x_dict = {'cell': batch['cell'].x}
-        #     edge_index_dict = {
-        #         ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
-        #         ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
-        #         ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
-        #     }
-        #     logits = model(x_dict, edge_index_dict)
-        #     labels = batch['cell'].y
-        #     num_nodes = len(labels)
 
         loss.backward()
         optimizer.step()
@@ -419,24 +409,10 @@ def evaluate_epoch_hetero(model, loader, criterion, device, epoch, use_amp=True)
 
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=use_amp):
             logits = model(batch)
+
             labels = batch['cell'].y
             num_nodes = batch['cell'].num_nodes
             loss = criterion(logits, labels.float())
-
-        # if hasattr(batch, 'x_dict'):
-        #     logits = model(batch)
-        #     labels = batch['cell'].y
-        #     num_nodes = batch['cell'].num_nodes
-        # else:
-        #     x_dict = {'cell': batch['cell'].x}
-        #     edge_index_dict = {
-        #         ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
-        #         ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
-        #         ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
-        #     }
-        #     logits = model(x_dict, edge_index_dict)
-        #     labels = batch['cell'].y
-        #     num_nodes = len(labels)
 
         logits = logits.float()
 
@@ -603,12 +579,14 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
         print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
         print("Tracking both threshold-based and top-1 metrics")
         print("Using HOMOGENEOUS graph format (all edge types merged)")
-        if config.training.switch_epoch < config.training.epochs:
-            print(f"Will switch to mixed dataset (75% state-0, 25% old) at epoch {config.training.switch_epoch}")
+
+        switch_epoch = getattr(config.training, 'switch_epoch', None)
+        if switch_epoch and switch_epoch < config.training.epochs:
+            print(f"Will switch to mixed dataset (75% state-0, 25% old) at epoch {switch_epoch}")
 
         for epoch in range(1, config.training.epochs + 1):
-            if epoch == config.training.switch_epoch and mixed_train_loader is None:
-                print(f"\n🔄 Switching to mixed dataset at epoch {epoch}")
+            if switch_epoch and epoch == switch_epoch and mixed_train_loader is None:
+                print(f"\n Switching to mixed dataset at epoch {epoch}")
                 print(f"Loading state-0 dataset from {config.training.state0_json_path}")
 
                 # Create homogeneous datasets
@@ -821,7 +799,10 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
             solve_stats = evaluate_solve_rate(model, config.data.auto_reg_json, device)
             solve_rate = solve_stats['solve_rate']
 
-            F1_CONVERGENCE_THRESHOLD = 0.9935
+            if config.model.model_type == "HRM_FullSpatial":
+                F1_CONVERGENCE_THRESHOLD = 0.9935
+            else:
+                F1_CONVERGENCE_THRESHOLD = 0.0
             converged = val_metrics['f1'] >= F1_CONVERGENCE_THRESHOLD
 
             if converged:
@@ -868,6 +849,230 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
 
     finally:
         tracker.finish()
+
+
+def train_model_for_ablation(
+    model_type: str,
+    multistate_json: str,
+    state0_json: str,
+    test_json: str,
+    checkpoint_dir: str,
+    config_overrides: dict = None,
+    device: str = 'cuda'
+):
+    """
+    Generic training orchestrator for ablation studies.
+
+    Args:
+        model_type: 'gat', 'hetero_gat', 'hrm_fullspatial', or 'benchmark'
+        multistate_json: Path to multi-state training data
+        state0_json: Path to state-0 training data
+        test_json: Path to test data
+        checkpoint_dir: Directory to save checkpoint
+        config_overrides: Dict of config overrides
+        device: Device to train on
+
+    Returns:
+        (model, best_f1, training_time)
+    """
+    import time
+    import os
+    from pathlib import Path
+    from torch.utils.data import ConcatDataset
+    from torch.utils.data import DataLoader as VanillaDataLoader
+    from torch_geometric.loader import DataLoader as GraphDataLoader
+    from data_loader import HomogeneousQueensDataset, BenchmarkDataset
+    from bm_model import BenchmarkComparisonModel
+    from bm_train import benchmark_training
+
+    config = Config()
+
+    if config_overrides:
+        for key, value in config_overrides.items():
+            if hasattr(config.model, key):
+                setattr(config.model, key, value)
+            elif hasattr(config.training, key):
+                setattr(config.training, key, value)
+            elif hasattr(config.benchmark, key):
+                setattr(config.benchmark, key, value)
+
+    config.data.train_json = multistate_json
+    config.data.auto_reg_json = test_json
+    config.training.state0_json_path = state0_json
+    config.training.combine_state0 = True
+    config.experiment.experiment_name = f"ablation_{model_type}"
+    config.experiment.checkpoint_dir = checkpoint_dir
+    config.experiment.tags = ['ablation', model_type]
+
+    os.environ['WANDB_MODE'] = 'disabled'
+
+    print("\n" + "="*80)
+    print(f"TRAINING {model_type.upper()}")
+    print("="*80)
+
+    if model_type == 'gat':
+        config.model.model_type = 'GAT'
+        config.model.layer_count = config_overrides.get('layer_count', 6)
+
+        model = GAT(
+            input_dim=config.model.input_dim,
+            hidden_dim=config.model.hidden_dim,
+            layer_count=config.model.layer_count,
+            dropout=config.model.dropout,
+            heads=config.model.gat_heads
+        )
+
+        ds_multistate_train = HomogeneousQueensDataset(
+            multistate_json, split="train", val_ratio=config.training.val_ratio, seed=config.data.seed
+        )
+        ds_multistate_val = HomogeneousQueensDataset(
+            multistate_json, split="val", val_ratio=config.training.val_ratio, seed=config.data.seed
+        )
+        ds_state0_train = HomogeneousQueensDataset(
+            state0_json, split="train", val_ratio=config.training.val_ratio, seed=config.data.seed
+        )
+        ds_state0_val = HomogeneousQueensDataset(
+            state0_json, split="val", val_ratio=config.training.val_ratio, seed=config.data.seed
+        )
+
+        combined_train = ConcatDataset([ds_multistate_train, ds_state0_train])
+        combined_val = ConcatDataset([ds_multistate_val, ds_state0_val])
+
+        train_loader = GraphDataLoader(combined_train, batch_size=config.training.batch_size,
+                                       shuffle=True, num_workers=0, pin_memory=True)
+        val_loader = GraphDataLoader(combined_val, batch_size=config.training.batch_size,
+                                     shuffle=False, num_workers=0, pin_memory=True)
+
+        print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+        print(f"Train samples: {len(train_loader.dataset):,}")
+        print(f"Val samples: {len(val_loader.dataset):,}")
+
+        start_time = time.time()
+        model, best_f1 = run_training_with_tracking(model, train_loader, val_loader, config)
+        training_time = time.time() - start_time
+
+    elif model_type == 'hetero_gat':
+        config.model.model_type = 'HeteroGAT'
+        config.model.layer_count = config_overrides.get('layer_count', 6)
+
+        model = HeteroGAT(
+            input_dim=config.model.input_dim,
+            hidden_dim=config.model.hidden_dim,
+            layer_count=config.model.layer_count,
+            dropout=config.model.dropout,
+            gat_heads=config.model.gat_heads,
+            hgt_heads=config.model.hgt_heads,
+            use_batch_norm=True
+        )
+
+        train_loader, val_loader = get_combined_queens_loaders(
+            multistate_json, state0_json,
+            batch_size=config.training.batch_size,
+            val_ratio=config.training.val_ratio,
+            seed=config.data.seed,
+            num_workers=0, pin_memory=True, shuffle_train=True,
+            same_size_batches=False, drop_last=False
+        )
+
+        print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+        print(f"Train samples: {len(train_loader.dataset):,}")
+        print(f"Val samples: {len(val_loader.dataset):,}")
+
+        start_time = time.time()
+        model, best_f1 = run_training_with_tracking_hetero(model, train_loader, val_loader, config)
+        training_time = time.time() - start_time
+
+    elif model_type == 'hrm_fullspatial':
+        config.model.model_type = 'HRM_FullSpatial'
+        config.model.n_cycles = config_overrides.get('n_cycles', 3)
+        config.model.t_micro = config_overrides.get('t_micro', 2)
+        config.training.same_size_batches = True
+        config.training.drop_last = True
+
+        model = HRM_FullSpatial(
+            input_dim=config.model.input_dim,
+            hidden_dim=config.model.hidden_dim,
+            gat_heads=config.model.gat_heads,
+            hgt_heads=config.model.hgt_heads,
+            hmod_heads=config.model.hmod_heads,
+            dropout=config.model.dropout,
+            n_cycles=config.model.n_cycles,
+            t_micro=config.model.t_micro,
+        )
+
+        train_loader, val_loader = get_combined_queens_loaders(
+            multistate_json, state0_json,
+            batch_size=config.training.batch_size,
+            val_ratio=config.training.val_ratio,
+            seed=config.data.seed,
+            num_workers=0, pin_memory=True, shuffle_train=True,
+            same_size_batches=True, drop_last=True
+        )
+
+        print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+        print(f"HRM Config: {config.model.n_cycles} cycles, {config.model.t_micro} micro-steps")
+        print(f"Train samples: {len(train_loader.dataset):,}")
+        print(f"Val samples: {len(val_loader.dataset):,}")
+
+        start_time = time.time()
+        model, best_f1 = run_training_with_tracking_hetero(model, train_loader, val_loader, config)
+        training_time = time.time() - start_time
+
+    elif model_type == 'benchmark':
+        config.benchmark.layers = config_overrides.get('layers', 6)
+
+        model = BenchmarkComparisonModel(
+            input_dim=config.benchmark.input_dim,
+            hidden_dim=config.benchmark.hidden_dim,
+            layers=config.benchmark.layers,
+            p_drop=config.benchmark.dropout,
+        )
+
+        ds_multistate_train = BenchmarkDataset(
+            multistate_json, split="train", val_ratio=config.training.val_ratio, seed=config.data.seed
+        )
+        ds_multistate_val = BenchmarkDataset(
+            multistate_json, split="val", val_ratio=config.training.val_ratio, seed=config.data.seed
+        )
+        ds_state0_train = BenchmarkDataset(
+            state0_json, split="train", val_ratio=config.training.val_ratio, seed=config.data.seed
+        )
+        ds_state0_val = BenchmarkDataset(
+            state0_json, split="val", val_ratio=config.training.val_ratio, seed=config.data.seed
+        )
+
+        combined_train = ConcatDataset([ds_multistate_train, ds_state0_train])
+        combined_val = ConcatDataset([ds_multistate_val, ds_state0_val])
+
+        train_loader = VanillaDataLoader(combined_train, batch_size=config.training.batch_size,
+                                        shuffle=True, num_workers=0, pin_memory=True)
+        val_loader = VanillaDataLoader(combined_val, batch_size=config.training.batch_size,
+                                      shuffle=False, num_workers=0, pin_memory=True)
+
+        print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+        print(f"Train samples: {len(train_loader.dataset):,}")
+        print(f"Val samples: {len(val_loader.dataset):,}")
+
+        start_time = time.time()
+        model, best_f1 = benchmark_training(model, train_loader, val_loader, config)
+        training_time = time.time() - start_time
+
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}")
+
+    Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+    checkpoint_path = Path(checkpoint_dir) / f'{model_type}_ablation.pt'
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'best_f1': best_f1,
+        'config': config.to_dict(),
+    }, checkpoint_path)
+
+    print(f"{model_type.upper()} Training Complete! Best F1: {best_f1:.4f} | Time: {training_time/60:.1f} min")
+    print(f"Checkpoint saved to {checkpoint_path}")
+
+    return model, best_f1, training_time
+
 
 class FocalLoss(nn.Module):
     """Binary focal loss for logits."""
