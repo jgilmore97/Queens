@@ -167,8 +167,22 @@ class HeteroGAT(nn.Module):
         for layer_idx in self.input_injection_layers:
             self.input_projections[str(layer_idx)] = nn.Linear(input_dim, hidden_dim)
 
-    def forward(self, x_dict, edge_index_dict):
-        """Forward pass with multi-stage global context injection for Type 2 error prevention."""
+    def forward(self, batch):
+        """Forward pass with multi-stage global context injection for Type 2 error prevention.
+
+        Args:
+            batch: HeteroData batch object from PyTorch Geometric or _MutableBatch wrapper
+        """
+        if hasattr(batch, 'x_dict') and hasattr(batch, 'edge_index_dict'):
+            x_dict = batch.x_dict
+            edge_index_dict = batch.edge_index_dict
+        else:
+            x_dict = {'cell': batch['cell'].x}
+            edge_index_dict = {
+                ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
+                ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
+                ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
+            }
 
         original_input = x_dict['cell']
 
@@ -225,7 +239,24 @@ class HeteroGAT(nn.Module):
 
         return logits
 
-    def get_attention_weights(self, x_dict, edge_index_dict, layer_idx=0):
+    def get_attention_weights(self, batch, layer_idx=0):
+        """Get attention weights for a specific layer.
+
+        Args:
+            batch: HeteroData batch object from PyTorch Geometric or _MutableBatch wrapper
+            layer_idx: Layer index to extract attention from
+        """
+        if hasattr(batch, 'x_dict') and hasattr(batch, 'edge_index_dict'):
+            x_dict = batch.x_dict
+            edge_index_dict = batch.edge_index_dict
+        else:
+            x_dict = {'cell': batch['cell'].x}
+            edge_index_dict = {
+                ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
+                ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
+                ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
+            }
+
         if layer_idx == 0:
             conv_layer = self.conv1
         elif layer_idx <= len(self.convs):
