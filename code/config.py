@@ -52,6 +52,9 @@ class BenchmarkConfig:
     hidden_dim: int = 128
     layers: int = 6
     dropout: float = 0.12
+    n_heads = 4
+    microsteps = 2
+    n_cycles = 3
 
 @dataclass
 class TrainingConfig:
@@ -161,9 +164,9 @@ class Config:
 
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "Full Spacial HRM - 1e-5 constant LR",
-        "tags": ["FullSpatial", "HRM", "No Vector Compression", "More Epochs", "Lower Eta Min", "Higher LR", "Lower WD"],
-        "notes": "Using HRM_FullSpatial model with no vector compression and lower cosine scheduler eta_min."
+        "experiment_name": "Benchmark HRM",
+        "tags": ["benchmark", "non-graph HRM"],
+        "notes": "Using a non-graph simple HRM for comparison."
     }
 }
 

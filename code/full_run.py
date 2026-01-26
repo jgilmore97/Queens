@@ -203,8 +203,12 @@ def main_benchmark_training():
     model = BenchmarkComparisonModel(
         input_dim=bm_config.benchmark.input_dim,
         hidden_dim=bm_config.benchmark.hidden_dim,
-        layers=bm_config.benchmark.layers,
-        p_drop=bm_config.benchmark.dropout
+        # layers=bm_config.benchmark.layers,
+        p_drop=bm_config.benchmark.dropout,
+        n_heads=bm_config.benchmark.n_heads,
+        microsteps=bm_config.benchmark.microsteps,
+        n_cycles=bm_config.benchmark.n_cycles
+
     )
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
