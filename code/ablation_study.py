@@ -48,7 +48,7 @@ SHARED_CONFIG = {
     't_micro': 2,
 }
 
-MODELS_TO_TRAIN = ['gat', 'hetero_gat', 'hrm_fullspatial', 'benchmark']
+MODELS_TO_TRAIN = ['gat', 'hetero_gat', 'hrm_fullspatial', 'benchmark_hrm', 'benchmark_sequential']
 
 def set_seed(seed: int = 42):
     random.seed(seed)
@@ -213,7 +213,7 @@ def evaluate_model(model_name: str, model: torch.nn.Module, device) -> Dict:
 
     if model_name == 'gat':
         results = evaluate_solve_rate_homogeneous(model, test_path, device)
-    elif model_name == 'benchmark':
+    elif model_name in ('benchmark_hrm', 'benchmark_sequential'):
         results = evaluate_solve_rate_benchmark(model, test_path, device)
     else:
         results = evaluate_solve_rate_hetero(model, test_path, device)

@@ -1,14 +1,13 @@
-"""Training scripts for benchmark models."""
-
 import random
+
 import numpy as np
 import torch
+from tqdm.auto import tqdm
+
 from config import Config
 from data_loader import get_benchmark_loaders
-from bm_model import BenchmarkComparisonModel
-from train import FocalLoss, create_scheduler
 from experiment_tracker import ExperimentTracker
-from tqdm.auto import tqdm
+from train import FocalLoss, create_scheduler
 
 
 def set_seed(seed: int = 42) -> None:

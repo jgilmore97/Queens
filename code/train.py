@@ -864,7 +864,7 @@ def train_model_for_ablation(
     Generic training orchestrator for ablation studies.
 
     Args:
-        model_type: 'gat', 'hetero_gat', 'hrm_fullspatial', or 'benchmark'
+        model_type: 'gat', 'hetero_gat', 'hrm_fullspatial', 'benchmark_hrm', or 'benchmark_sequential'
         multistate_json: Path to multi-state training data
         state0_json: Path to state-0 training data
         test_json: Path to test data
@@ -882,7 +882,7 @@ def train_model_for_ablation(
     from torch.utils.data import DataLoader as VanillaDataLoader
     from torch_geometric.loader import DataLoader as GraphDataLoader
     from data_loader import HomogeneousQueensDataset, BenchmarkDataset
-    from bm_model import BenchmarkComparisonModel
+    from bm_model import BenchmarkHRM, BenchmarkSequential
     from bm_train import benchmark_training
 
     config = Config()
@@ -1018,14 +1018,59 @@ def train_model_for_ablation(
         model, best_f1 = run_training_with_tracking_hetero(model, train_loader, val_loader, config)
         training_time = time.time() - start_time
 
-    elif model_type == 'benchmark':
-        config.benchmark.layers = config_overrides.get('layers', 6)
+    elif model_type == 'benchmark_hrm':
+        config.benchmark.model_type = 'hrm'
+        config.benchmark.n_cycles = config_overrides.get('n_cycles', 3)
+        config.benchmark.microsteps = config_overrides.get('t_micro', 2)
 
-        model = BenchmarkComparisonModel(
+        model = BenchmarkHRM(
             input_dim=config.benchmark.input_dim,
             hidden_dim=config.benchmark.hidden_dim,
-            layers=config.benchmark.layers,
             p_drop=config.benchmark.dropout,
+            n_heads=config.benchmark.n_heads,
+            n_cycles=config.benchmark.n_cycles,
+            t_micro=config.benchmark.microsteps,
+        )
+
+        ds_multistate_train = BenchmarkDataset(
+            multistate_json, split="train", val_ratio=config.training.val_ratio, seed=config.data.seed
+        )
+        ds_multistate_val = BenchmarkDataset(
+            multistate_json, split="val", val_ratio=config.training.val_ratio, seed=config.data.seed
+        )
+        ds_state0_train = BenchmarkDataset(
+            state0_json, split="train", val_ratio=config.training.val_ratio, seed=config.data.seed
+        )
+        ds_state0_val = BenchmarkDataset(
+            state0_json, split="val", val_ratio=config.training.val_ratio, seed=config.data.seed
+        )
+
+        combined_train = ConcatDataset([ds_multistate_train, ds_state0_train])
+        combined_val = ConcatDataset([ds_multistate_val, ds_state0_val])
+
+        train_loader = VanillaDataLoader(combined_train, batch_size=config.training.batch_size,
+                                        shuffle=True, num_workers=0, pin_memory=True)
+        val_loader = VanillaDataLoader(combined_val, batch_size=config.training.batch_size,
+                                      shuffle=False, num_workers=0, pin_memory=True)
+
+        print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+        print(f"Train samples: {len(train_loader.dataset):,}")
+        print(f"Val samples: {len(val_loader.dataset):,}")
+
+        start_time = time.time()
+        model, best_f1 = benchmark_training(model, train_loader, val_loader, config)
+        training_time = time.time() - start_time
+
+    elif model_type == 'benchmark_sequential':
+        config.benchmark.model_type = 'sequential'
+        config.benchmark.layers = config_overrides.get('layers', 6)
+
+        model = BenchmarkSequential(
+            input_dim=config.benchmark.input_dim,
+            hidden_dim=config.benchmark.hidden_dim,
+            p_drop=config.benchmark.dropout,
+            n_heads=config.benchmark.n_heads,
+            layers=config.benchmark.layers,
         )
 
         ds_multistate_train = BenchmarkDataset(

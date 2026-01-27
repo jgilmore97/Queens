@@ -143,3 +143,15 @@ class BenchmarkSequential(nn.Module):
             h = h + layer(h)
         out = self.classifier(h)
         return out
+
+
+BENCHMARK_MODELS = {
+    'hrm': BenchmarkHRM,
+    'sequential': BenchmarkSequential,
+}
+
+
+def get_benchmark_model(model_type: str, **kwargs):
+    if model_type not in BENCHMARK_MODELS:
+        raise ValueError(f"Unknown benchmark model type: {model_type}. Available: {list(BENCHMARK_MODELS.keys())}")
+    return BENCHMARK_MODELS[model_type](**kwargs)

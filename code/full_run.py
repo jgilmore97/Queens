@@ -1,16 +1,16 @@
 import os
+import random
+
+import numpy as np
 import torch
 from pathlib import Path
 
-from train import run_training_with_tracking_hetero, run_training_with_tracking
-from model import GAT, HeteroGAT, HRM, HRM_FullSpatial
-from data_loader import get_queens_loaders, get_benchmark_loaders, get_combined_queens_loaders, SizeBucketBatchSampler
-from config import Config, BASELINE_CONFIG, BenchmarkConfig
-from bm_model import BenchmarkComparisonModel
+from bm_model import get_benchmark_model
 from bm_train import benchmark_training
-
-import random
-import numpy as np
+from config import Config, BASELINE_CONFIG, BenchmarkConfig
+from data_loader import get_queens_loaders, get_benchmark_loaders, get_combined_queens_loaders, SizeBucketBatchSampler
+from model import GAT, HeteroGAT, HRM, HRM_FullSpatial
+from train import run_training_with_tracking_hetero, run_training_with_tracking
 
 def set_seed(seed=42):
     """Set random seeds for reproducibility."""
@@ -186,10 +186,12 @@ def main_hrm_training():
         print(f"\nTraining failed with error: {e}")
         raise
 
-def main_benchmark_training():
-    """Train benchmark comparison model."""
+def main_benchmark_training(model_type: str = None):
     set_seed(42)
     bm_config = Config(**BASELINE_CONFIG)
+
+    if model_type is not None:
+        bm_config.benchmark.model_type = model_type
 
     train_loader, val_loader = get_benchmark_loaders(
         bm_config.data.train_json,
@@ -200,22 +202,33 @@ def main_benchmark_training():
         pin_memory=bm_config.data.pin_memory,
         shuffle_train=bm_config.data.shuffle_train,
     )
-    model = BenchmarkComparisonModel(
-        input_dim=bm_config.benchmark.input_dim,
-        hidden_dim=bm_config.benchmark.hidden_dim,
-        # layers=bm_config.benchmark.layers,
-        p_drop=bm_config.benchmark.dropout,
-        n_heads=bm_config.benchmark.n_heads,
-        microsteps=bm_config.benchmark.microsteps,
-        n_cycles=bm_config.benchmark.n_cycles
 
-    )
+    if bm_config.benchmark.model_type == 'hrm':
+        model = get_benchmark_model(
+            'hrm',
+            input_dim=bm_config.benchmark.input_dim,
+            hidden_dim=bm_config.benchmark.hidden_dim,
+            p_drop=bm_config.benchmark.dropout,
+            n_heads=bm_config.benchmark.n_heads,
+            n_cycles=bm_config.benchmark.n_cycles,
+            t_micro=bm_config.benchmark.microsteps,
+        )
+    else:
+        model = get_benchmark_model(
+            'sequential',
+            input_dim=bm_config.benchmark.input_dim,
+            hidden_dim=bm_config.benchmark.hidden_dim,
+            p_drop=bm_config.benchmark.dropout,
+            n_heads=bm_config.benchmark.n_heads,
+            layers=bm_config.benchmark.layers,
+        )
+
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")
 
-    print(f"\nStarting Benchmark training for {bm_config.training.epochs} epochs...")
+    print(f"\nStarting Benchmark ({bm_config.benchmark.model_type}) training for {bm_config.training.epochs} epochs...")
     try:
         model, best_f1 = benchmark_training(
             model=model,
@@ -224,7 +237,7 @@ def main_benchmark_training():
             config=bm_config
         )
 
-        print(f"\nBenchmark training completed! Best validation F1: {best_f1:.4f}")
+        print(f"\nBenchmark ({bm_config.benchmark.model_type}) training completed! Best validation F1: {best_f1:.4f}")
         return model, best_f1
 
     except KeyboardInterrupt:
