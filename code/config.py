@@ -47,7 +47,7 @@ class ModelConfig:
     input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])
 
 class BenchmarkConfig:
-    """Benchmark model configuration."""
+    model_type: str = "hrm"
     input_dim: int = 14
     hidden_dim: int = 128
     layers: int = 6
