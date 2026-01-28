@@ -8,7 +8,7 @@ from typing import Dict, Any
 import numpy as np
 from tqdm import tqdm
 
-from board_manipulation import (
+from queens_solver.data.preprocessing import (
     extract, solve_queens, hash_board, expand_board_dataset,
     rotate_board_data, generate_training_states, save_stateless_dataset_json
 )
@@ -98,7 +98,6 @@ def process_puzzle_images(
             "source": seed["source"],
             "iteration": 0
         }
-        print(f'SEED NAME {seed['source']}')
         dataset.append(seed_entry)
 
     if augment and gen_count > 0:

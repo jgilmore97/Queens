@@ -1,11 +1,15 @@
-import torch
-import numpy as np
-from typing import Dict, List, Tuple
+import logging
 from dataclasses import dataclass
-from torch_geometric.data import Batch
 from pathlib import Path
+from typing import Dict, List, Tuple
 
-from data_loader import QueensDataset
+import numpy as np
+import torch
+from torch_geometric.data import Batch
+
+from queens_solver.data.dataset import QueensDataset
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -32,7 +36,7 @@ class Step0Dataset(QueensDataset):
             seed=seed
         )
         self.records = [r for r in self.records if r.get('step', 0) == 0]
-        print(f"Step0Dataset: {len(self.records)} step-0 puzzles")
+        logger.debug(f"Step0Dataset: {len(self.records)} step-0 puzzles")
 
 
 class _MutableBatch:
@@ -95,7 +99,7 @@ def evaluate_solve_rate(
             size_groups[n] = []
         size_groups[n].append(idx)
 
-    print(f"Puzzle sizes: {{{', '.join(f'{n}x{n}: {len(idxs)}' for n, idxs in sorted(size_groups.items()))}}}")
+    logger.debug(f"Puzzle sizes: {{{', '.join(f'{n}x{n}: {len(idxs)}' for n, idxs in sorted(size_groups.items()))}}}")
 
     total_puzzles = 0
     solved_puzzles = 0

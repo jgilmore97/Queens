@@ -1,13 +1,16 @@
+import logging
 import random
 
 import numpy as np
 import torch
 from tqdm.auto import tqdm
 
-from config import Config
-from data_loader import get_benchmark_loaders
-from experiment_tracker import ExperimentTracker
-from train import FocalLoss, create_scheduler
+from queens_solver.config import Config
+
+logger = logging.getLogger(__name__)
+from queens_solver.data.dataset import get_benchmark_loaders
+from queens_solver.training.tracker import ExperimentTracker
+from queens_solver.training.trainer import FocalLoss, create_scheduler
 
 
 def set_seed(seed: int = 42) -> None:
@@ -254,11 +257,11 @@ def benchmark_training(
             base_log = (f"Epoch {epoch:02d}| "
                        f"Train: L={train_metrics['loss']:.4f} Acc={train_metrics['accuracy']:.3f} F1={train_metrics['f1']:.3f} T1={train_metrics['top1_accuracy']:.3f} | "
                        f"Val: L={val_metrics['loss']:.4f} Acc={val_metrics['accuracy']:.3f} F1={val_metrics['f1']:.3f} T1={val_metrics['top1_accuracy']:.3f}")
-            print(base_log)
+            logger.info(base_log)
 
-        print(f"\nTraining completed!")
-        print(f"Best validation F1: {best_f1:.4f}")
-        print(f"Best validation Top-1 Accuracy: {best_top1_acc:.4f} (epoch {best_top1_epoch})")
+        logger.info(f"\nTraining completed!")
+        logger.info(f"Best validation F1: {best_f1:.4f}")
+        logger.info(f"Best validation Top-1 Accuracy: {best_top1_acc:.4f} (epoch {best_top1_epoch})")
 
         return model, best_f1
     

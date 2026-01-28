@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -19,10 +20,14 @@ wheels/
 .installed.cfg
 *.egg
 
+# Testing
 .pytest_cache/
 .coverage
 htmlcov/
+.tox/
+.nox/
 
+# Virtual environments
 .env
 .venv
 env/
@@ -31,11 +36,40 @@ ENV/
 env.bak/
 venv.bak/
 
+# IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
+# OS
 .DS_Store
 Thumbs.db
+
+# ML/Data artifacts
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+wandb/
+outputs/
+logs/
+
+# Data files (keep structure, ignore large files)
+data/*.json
+!data/.gitkeep
+
+# Sweep results
+sweep_results_*.json
+*_best_params.json
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Type checking
+.mypy_cache/
+
+# Ruff
+.ruff_cache/

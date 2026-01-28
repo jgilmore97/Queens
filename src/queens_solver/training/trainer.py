@@ -1,14 +1,18 @@
+import logging
+
+import numpy as np
 import torch
 from torch import nn, optim
 import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR, ReduceLROnPlateau, SequentialLR, LinearLR, ConstantLR
 from tqdm.auto import tqdm
-import numpy as np
 from torch.cuda.amp import autocast
 
-from experiment_tracker import ExperimentTracker
-from data_loader import (
+from queens_solver.training.tracker import ExperimentTracker
+
+logger = logging.getLogger(__name__)
+from queens_solver.data.dataset import (
     QueensDataset,
     HomogeneousQueensDataset,
     MixedDataset,
@@ -16,9 +20,9 @@ from data_loader import (
     create_filtered_old_dataset_homogeneous,
     get_combined_queens_loaders,
 )
-from config import Config
-from model import GAT, HeteroGAT, HRM, HRM_FullSpatial
-from vectorized_eval import evaluate_solve_rate
+from queens_solver.config import Config
+from queens_solver.models.models import GAT, HeteroGAT, HRM, HRM_FullSpatial
+from queens_solver.evaluation.evaluator import evaluate_solve_rate
 
 
 def calculate_top1_metrics(logits, labels, batch_info):
@@ -574,20 +578,18 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
         current_dataset = "multi-state"
         switched = False
 
-        print(f"Starting training for {config.training.epochs} epochs")
-        print(f"Device: {device}")
-        print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-        print("Tracking both threshold-based and top-1 metrics")
-        print("Using HOMOGENEOUS graph format (all edge types merged)")
+        logger.info(
+            f"Training: {config.training.epochs} epochs, {sum(p.numel() for p in model.parameters()):,} params, "
+            f"device={device}, format=homogeneous"
+        )
 
         switch_epoch = getattr(config.training, 'switch_epoch', None)
         if switch_epoch and switch_epoch < config.training.epochs:
-            print(f"Will switch to mixed dataset (75% state-0, 25% old) at epoch {switch_epoch}")
+            logger.info(f"Dataset switch at epoch {switch_epoch}")
 
         for epoch in range(1, config.training.epochs + 1):
             if switch_epoch and epoch == switch_epoch and mixed_train_loader is None:
-                print(f"\n Switching to mixed dataset at epoch {epoch}")
-                print(f"Loading state-0 dataset from {config.training.state0_json_path}")
+                logger.info(f"Epoch {epoch}: Switching to mixed dataset")
 
                 # Create homogeneous datasets
                 state0_train_dataset = HomogeneousQueensDataset(
@@ -635,8 +637,8 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
                 current_dataset = "mixed (75% state-0, 25% old)"
                 switched = True
 
-                print(f"Mixed train samples: {len(mixed_dataset):,}")
-                print(f"State-0 val samples: {len(state0_val_dataset):,}")
+                logger.info(f"Mixed train samples: {len(mixed_dataset):,}")
+                logger.info(f"State-0 val samples: {len(state0_val_dataset):,}")
 
             if switched and mixed_train_loader is not None:
                 active_train_loader = mixed_train_loader
@@ -703,12 +705,12 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
                 base_log += f" | State0-Val: Acc={state0_val_metrics['accuracy']:.3f} F1={state0_val_metrics['f1']:.3f} T1={state0_val_metrics['top1_accuracy']:.3f}"
 
             base_log += f" | LR={current_lr:.1e} | {'🎯F1' if is_best_f1 else ''}{'🎯T1' if is_best_top1 else ''}"
-            print(base_log)
+            logger.info(base_log)
 
-        print(f"\nTraining completed!")
-        print(f"Best validation F1: {best_val_f1:.4f} (epoch {best_epoch})")
-        print(f"Best validation Top-1 Accuracy: {best_val_top1:.4f} (epoch {best_top1_epoch})")
-        print(f"Key insight: Top-1 accuracy shows how well argmax(logits) performs")
+        logger.info(f"\nTraining completed!")
+        logger.info(f"Best validation F1: {best_val_f1:.4f} (epoch {best_epoch})")
+        logger.info(f"Best validation Top-1 Accuracy: {best_val_top1:.4f} (epoch {best_top1_epoch})")
+        logger.info(f"Key insight: Top-1 accuracy shows how well argmax(logits) performs")
 
         return model, best_val_f1
 
@@ -748,14 +750,14 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
 
         use_amp = config.system.mixed_precision and torch.cuda.is_available()
 
-        print(f"Starting HETEROGENEOUS training for {config.training.epochs} epochs")
-        print(f"Device: {device}")
-        print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-        print(f"Scheduler: {config.training.scheduler_type}")
+        logger.info(f"Starting HETEROGENEOUS training for {config.training.epochs} epochs")
+        logger.info(f"Device: {device}")
+        logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+        logger.info(f"Scheduler: {config.training.scheduler_type}")
         if config.training.scheduler_type == "cosine":
-            print(f"T_max: {config.training.cosine_t_max}, eta_min: {config.training.cosine_eta_min:.1e}")
-        print(f"Train samples: {len(train_loader.dataset):,}")
-        print(f"Val samples: {len(val_loader.dataset):,}")
+            logger.info(f"T_max: {config.training.cosine_t_max}, eta_min: {config.training.cosine_eta_min:.1e}")
+        logger.info(f"Train samples: {len(train_loader.dataset):,}")
+        logger.info(f"Val samples: {len(val_loader.dataset):,}")
 
         for epoch in range(1, config.training.epochs + 1):
             current_lr = optimizer.param_groups[0]['lr']
@@ -838,12 +840,12 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
             if flags:
                 base_log += f" | [{'+'.join(flags)}]"
 
-            print(base_log)
+            logger.info(base_log)
 
-        print(f"\nTraining completed!")
-        print(f"Best validation F1: {best_val_f1:.4f} (epoch {best_epoch})")
-        print(f"Best validation Top-1: {best_val_top1:.4f} (epoch {best_top1_epoch})")
-        print(f"Best solve rate: {best_solve_rate:.3f}")
+        logger.info(f"\nTraining completed!")
+        logger.info(f"Best validation F1: {best_val_f1:.4f} (epoch {best_epoch})")
+        logger.info(f"Best validation Top-1: {best_val_top1:.4f} (epoch {best_top1_epoch})")
+        logger.info(f"Best solve rate: {best_solve_rate:.3f}")
 
         return model, best_val_f1
 
@@ -881,9 +883,9 @@ def train_model_for_ablation(
     from torch.utils.data import ConcatDataset
     from torch.utils.data import DataLoader as VanillaDataLoader
     from torch_geometric.loader import DataLoader as GraphDataLoader
-    from data_loader import HomogeneousQueensDataset, BenchmarkDataset
-    from bm_model import BenchmarkHRM, BenchmarkSequential
-    from bm_train import benchmark_training
+    from queens_solver.data.dataset import HomogeneousQueensDataset, BenchmarkDataset
+    from queens_solver.models.benchmark import BenchmarkHRM, BenchmarkSequential
+    from queens_solver.training.benchmark_trainer import benchmark_training
 
     config = Config()
 
@@ -906,9 +908,7 @@ def train_model_for_ablation(
 
     os.environ['WANDB_MODE'] = 'disabled'
 
-    print("\n" + "="*80)
-    print(f"TRAINING {model_type.upper()}")
-    print("="*80)
+    logger.info(f"Training {model_type.upper()}")
 
     if model_type == 'gat':
         config.model.model_type = 'GAT'
@@ -943,9 +943,9 @@ def train_model_for_ablation(
         val_loader = GraphDataLoader(combined_val, batch_size=config.training.batch_size,
                                      shuffle=False, num_workers=0, pin_memory=True)
 
-        print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-        print(f"Train samples: {len(train_loader.dataset):,}")
-        print(f"Val samples: {len(val_loader.dataset):,}")
+        logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+        logger.info(f"Train samples: {len(train_loader.dataset):,}")
+        logger.info(f"Val samples: {len(val_loader.dataset):,}")
 
         start_time = time.time()
         model, best_f1 = run_training_with_tracking(model, train_loader, val_loader, config)
@@ -974,9 +974,9 @@ def train_model_for_ablation(
             same_size_batches=False, drop_last=False
         )
 
-        print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-        print(f"Train samples: {len(train_loader.dataset):,}")
-        print(f"Val samples: {len(val_loader.dataset):,}")
+        logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+        logger.info(f"Train samples: {len(train_loader.dataset):,}")
+        logger.info(f"Val samples: {len(val_loader.dataset):,}")
 
         start_time = time.time()
         model, best_f1 = run_training_with_tracking_hetero(model, train_loader, val_loader, config)
@@ -1009,10 +1009,10 @@ def train_model_for_ablation(
             same_size_batches=True, drop_last=True
         )
 
-        print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-        print(f"HRM Config: {config.model.n_cycles} cycles, {config.model.t_micro} micro-steps")
-        print(f"Train samples: {len(train_loader.dataset):,}")
-        print(f"Val samples: {len(val_loader.dataset):,}")
+        logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+        logger.info(f"HRM Config: {config.model.n_cycles} cycles, {config.model.t_micro} micro-steps")
+        logger.info(f"Train samples: {len(train_loader.dataset):,}")
+        logger.info(f"Val samples: {len(val_loader.dataset):,}")
 
         start_time = time.time()
         model, best_f1 = run_training_with_tracking_hetero(model, train_loader, val_loader, config)
@@ -1053,9 +1053,9 @@ def train_model_for_ablation(
         val_loader = VanillaDataLoader(combined_val, batch_size=config.training.batch_size,
                                       shuffle=False, num_workers=0, pin_memory=True)
 
-        print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-        print(f"Train samples: {len(train_loader.dataset):,}")
-        print(f"Val samples: {len(val_loader.dataset):,}")
+        logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+        logger.info(f"Train samples: {len(train_loader.dataset):,}")
+        logger.info(f"Val samples: {len(val_loader.dataset):,}")
 
         start_time = time.time()
         model, best_f1 = benchmark_training(model, train_loader, val_loader, config)
@@ -1094,9 +1094,9 @@ def train_model_for_ablation(
         val_loader = VanillaDataLoader(combined_val, batch_size=config.training.batch_size,
                                       shuffle=False, num_workers=0, pin_memory=True)
 
-        print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-        print(f"Train samples: {len(train_loader.dataset):,}")
-        print(f"Val samples: {len(val_loader.dataset):,}")
+        logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+        logger.info(f"Train samples: {len(train_loader.dataset):,}")
+        logger.info(f"Val samples: {len(val_loader.dataset):,}")
 
         start_time = time.time()
         model, best_f1 = benchmark_training(model, train_loader, val_loader, config)
@@ -1113,8 +1113,8 @@ def train_model_for_ablation(
         'config': config.to_dict(),
     }, checkpoint_path)
 
-    print(f"{model_type.upper()} Training Complete! Best F1: {best_f1:.4f} | Time: {training_time/60:.1f} min")
-    print(f"Checkpoint saved to {checkpoint_path}")
+    logger.info(f"{model_type.upper()} Training Complete! Best F1: {best_f1:.4f} | Time: {training_time/60:.1f} min")
+    logger.info(f"Checkpoint saved to {checkpoint_path}")
 
     return model, best_f1, training_time
 

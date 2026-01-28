@@ -8,10 +8,10 @@ import numpy as np
 import torch
 from torch_geometric.data import Batch
 
-from data_loader import HomogeneousQueensDataset
-from train import train_model_for_ablation
-from vectorized_eval import evaluate_solve_rate as evaluate_solve_rate_hetero, _batched_argmax
-from bm_vectorized_eval import evaluate_solve_rate as evaluate_solve_rate_benchmark
+from queens_solver.data.dataset import HomogeneousQueensDataset
+from queens_solver.training.trainer import train_model_for_ablation
+from queens_solver.evaluation.evaluator import evaluate_solve_rate as evaluate_solve_rate_hetero, _batched_argmax
+from queens_solver.evaluation.benchmark_eval import evaluate_solve_rate as evaluate_solve_rate_benchmark
 
 
 PROJECT_ROOT = Path(__file__).parent.parent

@@ -1,16 +1,16 @@
-import numpy as np
 import json
-
-from PIL import Image
+import logging
 import random
-
 from collections import deque, Counter, defaultdict
 import copy
 
+import numpy as np
+from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
-
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 def detect_grid_size_by_black_lines(
     image_path, axis='horizontal', row_or_col=100, black_threshold=50, visualize=False
@@ -340,9 +340,7 @@ def expand_board_dataset(seed_dataset, target_size=5000):
     round_count = 0
     while len(generated_dataset) < target_size and available_pool:
         round_count += 1
-        print(f"\n=== Round {round_count} ===")
-        print(f"Generated so far: {len(generated_dataset)}")
-        print(f"Attempting {len(available_pool)} mutations...")
+        logger.info(f"Round {round_count}: {len(generated_dataset)} generated, {len(available_pool)} mutations pending")
 
         successes = 0
         next_pool = deque()
@@ -358,8 +356,7 @@ def expand_board_dataset(seed_dataset, target_size=5000):
                     board_key = hash_board(base_region)
                     fail_streak[board_key] += 1
                     if fail_streak[board_key] >= 5:
-                        print(f"Board {root_source} (iter {parent_iter}) "
-                              "has failed to mutate in 5 consecutive rounds.")
+                        logger.debug(f"Board {root_source} (iter {parent_iter}) failed 5 consecutive rounds")
                     next_pool.append(entry)
                     continue
 
@@ -389,20 +386,19 @@ def expand_board_dataset(seed_dataset, target_size=5000):
                 fail_streak.pop(hash_board(base_region), None)
 
             except Exception as e:
-                print(f"Error mutating {root_source} (iter {parent_iter}): {e}")
+                logger.warning(f"Error mutating {root_source} (iter {parent_iter}): {e}")
                 next_pool.append(entry)
 
-        print(f"Round {round_count} complete: {successes} new boards.")
+        logger.info(f"Round {round_count} complete: {successes} new boards")
         if successes == 0:
-            print("No successful mutations this round — stopping early.")
+            logger.info("No successful mutations this round - stopping early")
             break
 
         available_pool = next_pool
 
-    print(f"\n Finished: {len(generated_dataset)} boards generated.\n")
-    print("Offspring per seed:")
+    logger.info(f"Finished: {len(generated_dataset)} boards generated")
     for seed, count in offspring_counter.items():
-        print(f"{seed}: {count}")
+        logger.debug(f"Offspring from {seed}: {count}")
 
     return generated_dataset, offspring_counter
 
@@ -443,7 +439,7 @@ def save_stateless_dataset_json(dataset, save_path):
     with open(save_path, "w") as f:
         json.dump(serializable_data, f)
 
-    print(f"Saved dataset to {save_path}")
+    logger.info(f"Saved dataset to {save_path}")
 
 def rotate_matrix_90(matrix):
     """Rotate a 2D list 90 degrees clockwise."""
@@ -536,7 +532,7 @@ def save_state_dataset_to_json(dataset, filename="queens_training_data.json"):
     """Save training dataset to a JSON file."""
     with open(filename, 'w') as f:
         json.dump(dataset, f, indent=2)
-    print(f"Saved {len(dataset)} examples to {filename}")
+    logger.info(f"Saved {len(dataset)} examples to {filename}")
 
 def visualize_queens_board_with_queens(example: dict, title: str = "Queens Board with Queens", show_labels = False) -> None:
     """Visualize a training example with queens overlaid on the colored region board."""

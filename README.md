@@ -96,21 +96,90 @@ Dataset Transition: Switch to state-0 (empty board) dataset at epoch 5 to improv
 
 The core challenge is distinguishing Type 2 from Type 3 using learned global reasoning. The hierarchical mechanism explicitly addresses this through multi-cycle refinement: initial L-module passes detect immediate constraints, while H-module integrates global state to identify unsolvable downstream positions.
 
+## Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/jgilmore97/Queens.git
+cd Queens
+
+# Install in editable mode
+pip install -e .
+
+# Or with all optional dependencies (dev tools, gradio app, hyperparameter sweeps)
+pip install -e ".[all]"
+```
+
+## Data Setup
+
+The training data is not included in this repository due to size. Place the following JSON files in the `data/` directory:
+
+| File | Description |
+|------|-------------|
+| `StateTrainingSet.json` | Training data with progressive game states (350k examples) |
+| `State0TrainingSet.json` | State-0 (empty board) training data for early-step accuracy |
+| `StateValSet.json` | Validation set for autoregressive full-solve evaluation |
+
+The expected directory structure:
+```
+data/
+├── StateTrainingSet.json
+├── State0TrainingSet.json
+└── StateValSet.json
+```
+
+## Quick Start
+
+```bash
+# Train the HRM model
+make train
+# or: python scripts/train.py
+
+# Run ablation study
+make ablation
+
+# Launch the interactive web demo
+make app
+```
+
 ## Project Structure
 
 ```
-code
-├── model.py                      # HRM and supporting architectures
-├── data_loader.py               # PyTorch Geometric dataset + heterogeneous graph construction
-├── config.py                    # Centralized configuration
-├── train.py                     # Training loop, loss computation, metrics
-├── board_manipulation.py        # Image processing, region mutation, synthetic generation
-├── FullRun.py                   # Experiment orchestrator
-├── evaluation_analysis.py       # Evaluation pipeline and visualization tools
-├── evaluation_util.py           # Utility functions for puzzle evaluation
-├── experiment_tracker.py  # Weights & Biases logging and checkpointing
-├── solver.py                    # Traditional backtracking solver (reference/validation)
-└── solver.py           # Enhanced solver with cycle detection and memoization
+queens-solver/
+├── data/                           # Dataset files (not tracked)
+│   ├── StateTrainingSet.json
+│   ├── State0TrainingSet.json
+│   └── StateValSet.json
+├── src/
+│   └── queens_solver/              # Main package
+│       ├── __init__.py
+│       ├── config.py               # Centralized configuration
+│       ├── models/                 # Model architectures
+│       │   ├── models.py           # HRM, HeteroGAT, GAT implementations
+│       │   └── benchmark.py        # Benchmark models for comparison
+│       ├── data/                   # Data loading & processing
+│       │   ├── dataset.py          # PyTorch Geometric datasets
+│       │   ├── preprocessing.py    # Image processing, puzzle generation
+│       │   └── utils.py            # Data utilities
+│       ├── training/               # Training logic
+│       │   ├── trainer.py          # Training loops and metrics
+│       │   ├── benchmark_trainer.py # Benchmark model training
+│       │   └── tracker.py          # W&B experiment tracking
+│       └── evaluation/             # Evaluation & inference
+│           ├── solver.py           # Model-based puzzle solver
+│           ├── evaluator.py        # Full puzzle evaluation
+│           ├── benchmark_eval.py   # Benchmark evaluation
+│           └── utils.py            # Evaluation utilities
+├── scripts/                        # Entry points
+│   ├── train.py                    # Main training script
+│   ├── ablation.py                 # Ablation study runner
+│   └── sweep.py                    # Hyperparameter sweep
+├── app/                            # Web interface
+│   └── gradio_app.py               # Gradio demo application
+├── pyproject.toml                  # Package configuration
+├── requirements.txt                # Dependencies
+├── Makefile                        # Common commands
+└── README.md
 ```
 
 ## Training Details

@@ -1,14 +1,18 @@
-import torch
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.colors as colors
-from typing import Dict, List, Tuple, Optional
+import logging
 from pathlib import Path
+from typing import Dict, List, Tuple, Optional
+
+import matplotlib.colors as colors
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
 from PIL import Image
 
-from model import HRM, HeteroGAT, GAT, HRM_FullSpatial
-from data_loader import build_heterogeneous_edge_index
-from board_manipulation import solve_queens
+from queens_solver.models.models import HRM, HeteroGAT, GAT, HRM_FullSpatial
+
+logger = logging.getLogger(__name__)
+from queens_solver.data.dataset import build_heterogeneous_edge_index
+from queens_solver.data.preprocessing import solve_queens
 
 
 class _SingleBatch:
@@ -63,7 +67,7 @@ class Solver:
                 n_cycles=model_config.get('n_cycles', 3),
                 t_micro=model_config.get('t_micro', 2)
             )
-            print(f"Loaded HRM Full Spatial solver (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)})")
+            logger.debug(f"Loaded HRM Full Spatial solver (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)})")
             is_heterogeneous = True
 
         elif is_hrm:
@@ -81,7 +85,7 @@ class Solver:
                 use_hmod=model_config.get('use_hmod', False),
                 same_size_batches=model_config.get('same_size_batches', False)
             )
-            print(f"Loaded HRM solver (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)})")
+            logger.debug(f"Loaded HRM solver (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)})")
             is_heterogeneous = True
             
         elif is_homogeneous_gat:
@@ -92,7 +96,7 @@ class Solver:
                 dropout=model_config['dropout'],
                 heads=model_config.get('gat_heads', 2)
             )
-            print(f"Loaded Homogeneous GAT solver")
+            logger.debug(f"Loaded Homogeneous GAT solver")
             is_heterogeneous = False
         else:
             model = HeteroGAT(
@@ -103,13 +107,13 @@ class Solver:
                 gat_heads=model_config['gat_heads'],
                 hgt_heads=model_config['hgt_heads']
             )
-            print(f"Loaded HeteroGAT solver")
+            logger.debug(f"Loaded HeteroGAT solver")
             is_heterogeneous = True
 
         model.load_state_dict(checkpoint['model_state_dict'])
 
-        print(f"Model loaded from checkpoint")
-        print(f"Model config: {model_config}")
+        logger.debug(f"Model loaded from checkpoint")
+        logger.debug(f"Model config: {model_config}")
 
         return model, is_heterogeneous
 
@@ -288,7 +292,7 @@ class Solver:
                     capture_activations=False
                 )
 
-            print(f"Placing queen at: ({row}, {col}) with logit score: {top_logit:.3f}")
+            logger.debug(f"Placing queen at: ({row}, {col}) with logit score: {top_logit:.3f}")
             queen_board[row, col] = 1
 
         if capture_activations:
@@ -369,7 +373,7 @@ class Solver:
                 output_path.mkdir(parents=True, exist_ok=True)
                 filename = output_path / f"step_{step_idx:02d}_queen_{row}_{col}.png"
                 plt.savefig(filename, dpi=100, bbox_inches='tight')
-                print(f"Saved: {filename}")
+                logger.debug(f"Saved: {filename}")
                 plt.close()
             else:
                 plt.show()
@@ -418,7 +422,7 @@ class Solver:
                 step_images.append(img)
 
         if not step_images:
-            print("No step images found for summary")
+            logger.warning("No step images found for summary")
             return
 
         total_height = sum(img.height for img in step_images)
@@ -433,7 +437,7 @@ class Solver:
 
         summary_path = output_path / 'summary_all_steps.png'
         summary.save(summary_path)
-        print(f"Saved summary: {summary_path}")
+        logger.debug(f"Saved summary: {summary_path}")
 
     def _draw_colored_board(self, ax, region_board, placed_queens, current_row, current_col):
         """Draw a colored board with regions, previous queen placements, and current placement marker."""
