@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import random
 import re
 from pathlib import Path
@@ -9,6 +10,8 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
+
+logger = logging.getLogger(__name__)
 from torch.utils.data import Sampler
 from torch_geometric.data import Data, HeteroData, Dataset
 from torch_geometric.loader import DataLoader
@@ -247,7 +250,7 @@ class SizeBucketBatchSampler(Sampler):
         for idx, record in enumerate(records):
             n = len(record['region'])
             self.size_buckets.setdefault(n, []).append(idx)
-        print(f"Size buckets: {{{', '.join(f'{n}x{n}: {len(idxs)}' for n, idxs in sorted(self.size_buckets.items()))}}}")
+        logger.debug(f"Size buckets: {{{', '.join(f'{n}x{n}: {len(idxs)}' for n, idxs in sorted(self.size_buckets.items()))}}}")
     
     def __iter__(self):
         batches = []
@@ -367,12 +370,11 @@ def get_combined_queens_loaders(
     
     combined_train = ConcatDataset([ds_multistate_train, ds_state0_train])
     combined_val = ConcatDataset([ds_multistate_val, ds_state0_val])
-    
-    print(f"Combined dataset created:")
-    print(f"Multi-state train: {len(ds_multistate_train):,}")
-    print(f"State-0 train: {len(ds_state0_train):,}")
-    print(f"Total train: {len(combined_train):,}")
-    print(f"Total val: {len(combined_val):,}")
+
+    logger.debug(
+        f"Combined dataset: multi-state={len(ds_multistate_train):,}, "
+        f"state-0={len(ds_state0_train):,}, total_train={len(combined_train):,}, val={len(combined_val):,}"
+    )
     
     kwargs = dict(
         num_workers=num_workers,
@@ -409,10 +411,10 @@ class MixedDataset(Dataset):
 
         self._len = min(len(dataset1), len(dataset2))
 
-        print(f"MixedDataset created:")
-        print(f"Dataset1 (state-0): {len(dataset1)} samples ({ratio1:.1%} sampling)")
-        print(f"Dataset2 (old filtered): {len(dataset2)} samples ({1-ratio1:.1%} sampling)")
-        print(f"Epoch length: {self._len}")
+        logger.debug(
+            f"MixedDataset: state-0={len(dataset1)} ({ratio1:.1%}), "
+            f"filtered={len(dataset2)} ({1-ratio1:.1%}), epoch_len={self._len}"
+        )
 
     def _shuffle_pools(self):
         """Shuffle both remaining pools using seeded RNG."""
@@ -461,7 +463,7 @@ def create_filtered_old_dataset(json_path, val_ratio, seed, split="train"):
         if record.get('iteration', 0) != 0
     ]
 
-    print(f"Filtered old dataset: {len(full_dataset.records)} -> {len(filtered_records)} (removed iteration 0)")
+    logger.debug(f"Filtered dataset: {len(full_dataset.records)} -> {len(filtered_records)} (removed iteration 0)")
 
     filtered_dataset = QueensDataset.__new__(QueensDataset)
     filtered_dataset.__dict__.update(full_dataset.__dict__)
@@ -571,7 +573,7 @@ def filter_dataset_to_step0(json_path: str | Path) -> List[dict]:
         if rec.get('step', 0) == 0
     ]
 
-    print(f"Filtered {json_path.name}: {len(records)} total → {len(step0_records)} step-0 puzzles")
+    logger.debug(f"Filtered {json_path.name}: {len(records)} -> {len(step0_records)} step-0 puzzles")
     return step0_records
 
 def create_filtered_old_dataset_homogeneous(json_path, val_ratio, seed, split="train"):
@@ -591,7 +593,7 @@ def create_filtered_old_dataset_homogeneous(json_path, val_ratio, seed, split="t
         if record.get('iteration', 0) != 0
     ]
 
-    print(f"Filtered old dataset (homogeneous): {len(full_dataset.records)} -> {len(filtered_records)} (removed iteration 0)")
+    logger.debug(f"Filtered homogeneous dataset: {len(full_dataset.records)} -> {len(filtered_records)} (removed iteration 0)")
 
     filtered_dataset = HomogeneousQueensDataset.__new__(HomogeneousQueensDataset)
     filtered_dataset.__dict__.update(full_dataset.__dict__)

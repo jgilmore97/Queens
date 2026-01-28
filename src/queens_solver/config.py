@@ -1,8 +1,13 @@
-from dataclasses import dataclass, field
-from typing import Optional, Dict, Any
-import torch
+import logging
 import os
-from data_loader import SizeBucketBatchSampler
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
+
+import torch
+
+from queens_solver.data.dataset import SizeBucketBatchSampler
+
+logger = logging.getLogger(__name__)
 
 def _detect_notebook_environment():
     """Detect if running in a notebook environment."""
@@ -113,7 +118,7 @@ class ExperimentConfig:
     log_predictions_every_n_epochs: int = 2
     save_model_every_n_epochs: int = 10
 
-    checkpoint_dir: str = "checkpoints/transformer/HRM/FullSpatial"
+    checkpoint_dir: str = 'checkpoints/test/HRM' #"checkpoints/transformer/HRM/FullSpatial"
     log_dir: str = "logs"
 
 @dataclass
@@ -137,10 +142,7 @@ class Config:
 
         self.update_from_dict(kwargs)
 
-        if self.data.num_workers == 0:
-            print("DataLoader multiprocessing disabled")
-        else:
-            print(f"DataLoader using {self.data.num_workers} workers")
+        logger.debug(f"DataLoader workers: {self.data.num_workers}")
 
     def update_from_dict(self, config_dict: Dict[str, Any]):
         """Update configuration from dictionary."""
@@ -164,9 +166,9 @@ class Config:
 
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "Benchmark HRM",
-        "tags": ["benchmark", "non-graph HRM"],
-        "notes": "Using a non-graph simple HRM for comparison."
+        "experiment_name": "New Repo HRM ",
+        "tags": ["Testing", 'Graph HRM'],
+        "notes": "Testing HRM model in new repository."
     }
 }
 

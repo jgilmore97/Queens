@@ -9,11 +9,11 @@ from typing import Dict
 from pathlib import Path
 import traceback
 
-from model import HRM_FullSpatial
-from data_loader import get_combined_queens_loaders
-from train import FocalLoss
-from vectorized_eval import evaluate_solve_rate
-from config import Config
+from queens_solver.models.models import HRM_FullSpatial
+from queens_solver.data.dataset import get_combined_queens_loaders
+from queens_solver.training.trainer import FocalLoss
+from queens_solver.evaluation.evaluator import evaluate_solve_rate
+from queens_solver.config import Config
 
 
 def set_seed(seed: int = 42) -> None:

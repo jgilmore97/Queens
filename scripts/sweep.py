@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime
 from functools import partial
 
-from sweep.objective import objective
+from scripts.sweep_objective import objective
 
 
 def save_results(study: optuna.Study, output_path: str):

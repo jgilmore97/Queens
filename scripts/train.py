@@ -5,12 +5,12 @@ import numpy as np
 import torch
 from pathlib import Path
 
-from bm_model import get_benchmark_model
-from bm_train import benchmark_training
-from config import Config, BASELINE_CONFIG, BenchmarkConfig
-from data_loader import get_queens_loaders, get_benchmark_loaders, get_combined_queens_loaders, SizeBucketBatchSampler
-from model import GAT, HeteroGAT, HRM, HRM_FullSpatial
-from train import run_training_with_tracking_hetero, run_training_with_tracking
+from queens_solver.models.benchmark import get_benchmark_model
+from queens_solver.training.benchmark_trainer import benchmark_training
+from queens_solver.config import Config, BASELINE_CONFIG, BenchmarkConfig
+from queens_solver.data.dataset import get_queens_loaders, get_benchmark_loaders, get_combined_queens_loaders, SizeBucketBatchSampler
+from queens_solver.models.models import GAT, HeteroGAT, HRM, HRM_FullSpatial
+from queens_solver.training.trainer import run_training_with_tracking_hetero, run_training_with_tracking
 
 def set_seed(seed=42):
     """Set random seeds for reproducibility."""
@@ -259,3 +259,33 @@ def run_heterogeneous_baseline():
 def run_benchmark_training():
     """Run the benchmark training experiment."""
     return main_benchmark_training()
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Train Queens Puzzle solver models",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python scripts/train.py                    # Train HRM (default)
+  python scripts/train.py --model hrm        # Train HRM explicitly
+  python scripts/train.py --model hetero_gat # Train HeteroGAT
+  python scripts/train.py --model benchmark  # Train non-graph benchmark
+        """
+    )
+    parser.add_argument(
+        "--model",
+        choices=["hrm", "hetero_gat", "benchmark"],
+        default="hrm",
+        help="Model architecture to train (default: hrm)"
+    )
+    args = parser.parse_args()
+
+    if args.model == "hrm":
+        main_hrm_training()
+    elif args.model == "hetero_gat":
+        main_heterogeneous_training()
+    elif args.model == "benchmark":
+        main_benchmark_training()

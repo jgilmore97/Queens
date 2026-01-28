@@ -1,8 +1,12 @@
-import torch
-import numpy as np
-from typing import Dict, Tuple, List
+import logging
+from typing import Dict, List, Tuple
 
-from data_loader import BenchmarkDataset
+import numpy as np
+import torch
+
+from queens_solver.data.dataset import BenchmarkDataset
+
+logger = logging.getLogger(__name__)
 
 
 class BenchmarkStep0Dataset(BenchmarkDataset):
@@ -171,19 +175,16 @@ def _evaluate_batch(
     return solved_count, num_puzzles, error_by_step, failed_puzzles
 
 
-def print_results(results: Dict) -> None:
-    """Print evaluation results."""
-    print("\n" + "=" * 50)
-    print("BENCHMARK MODEL EVALUATION RESULTS")
-    print("=" * 50)
-    print(f"Total puzzles: {results['total_puzzles']}")
-    print(f"Solved puzzles: {results['solved_puzzles']}")
-    print(f"Solve rate: {results['solve_rate']:.1%}")
+def log_results(results: Dict) -> None:
+    """Log evaluation results."""
+    logger.info(
+        f"Benchmark evaluation: {results['solved_puzzles']}/{results['total_puzzles']} solved "
+        f"({results['solve_rate']:.1%})"
+    )
 
     if results['error_by_step']:
-        print("\nFirst error distribution by step:")
         failed = results['total_puzzles'] - results['solved_puzzles']
         for step in sorted(results['error_by_step'].keys()):
             count = results['error_by_step'][step]
             pct = count / failed if failed > 0 else 0
-            print(f"Step {step}: {count} errors ({pct:.1%} of failures)")
+            logger.debug(f"Step {step}: {count} errors ({pct:.1%} of failures)")

@@ -1,14 +1,17 @@
 """Experiment tracking with W&B using consolidated epoch-level logging only."""
 
+import logging
 import os
 import time
-import psutil
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-import torch
 import numpy as np
+import psutil
+import torch
 import wandb
+
+logger = logging.getLogger(__name__)
 
 class ExperimentTracker:
     """Experiment tracking with consolidated epoch-level W&B logging to avoid step conflicts."""
@@ -27,7 +30,7 @@ class ExperimentTracker:
         Path(config.experiment.checkpoint_dir).mkdir(exist_ok=True)
         Path(config.experiment.log_dir).mkdir(exist_ok=True)
 
-        print("Experiment tracker initialized with consolidated logging")
+        logger.debug("Experiment tracker initialized")
 
     def _init_wandb(self, resume_id: Optional[str]):
         """Initialize W&B with config and optional resume."""
@@ -258,7 +261,7 @@ class ExperimentTracker:
                     predictions_logged += 1
 
                 except Exception as e:
-                    print(f"Warning: Could not compute prediction metrics for batch {predictions_logged}: {e}")
+                    logger.warning(f" Could not compute prediction metrics for batch {predictions_logged}: {e}")
                     predictions_logged += 1
                     continue
 
@@ -356,12 +359,12 @@ class ExperimentTracker:
         if epoch % self.config.experiment.save_model_every_n_epochs == 0:
             checkpoint_path = Path(self.config.experiment.checkpoint_dir) / f"checkpoint_epoch_{epoch}.pt"
             torch.save(checkpoint, checkpoint_path)
-            print(f"Checkpoint saved: {checkpoint_path}")
+            logger.info(f"Checkpoint saved: {checkpoint_path}")
 
         if is_best:
             best_path = Path(self.config.experiment.checkpoint_dir) / "best_model.pt"
             torch.save(checkpoint, best_path)
-            print(f"Best model saved: {best_path}")
+            logger.info(f"Best model saved: {best_path}")
 
             wandb.log({
                 "best_model/epoch": epoch,
@@ -382,7 +385,7 @@ class ExperimentTracker:
 
         wandb.log(final_metrics, step=9999)
         wandb.finish()
-        print("Experiment tracking finished")
+        logger.debug("Experiment tracking finished")
 
 def create_wandb_sweep(config: Dict[str, Any], project_name: str) -> str:
     """Create a wandb hyperparameter sweep and return sweep_id."""

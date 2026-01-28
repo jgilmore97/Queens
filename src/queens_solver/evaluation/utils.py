@@ -1,10 +1,14 @@
-import torch
-import numpy as np
 import json
+import logging
 import time
-from pathlib import Path
 from collections import defaultdict
-from typing import Dict, Any, Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import numpy as np
+import torch
+
+logger = logging.getLogger(__name__)
 
 def evaluate_full_puzzle_capability(
     solver,
@@ -21,7 +25,7 @@ def evaluate_full_puzzle_capability(
         with open(dataset_path, 'r') as f:
             test_data = json.load(f)
     except Exception as e:
-        print(f"Error loading dataset: {e}")
+        logger.error(f"Error loading dataset: {e}")
         return {}
 
     device = solver.device
@@ -35,7 +39,7 @@ def evaluate_full_puzzle_capability(
             state_0_puzzles.append(puzzle)
 
     if not state_0_puzzles:
-        print("No state-0 puzzles found in the dataset")
+        logger.warning("No state-0 puzzles found in the dataset")
         return {}
 
     stats = {
@@ -49,7 +53,7 @@ def evaluate_full_puzzle_capability(
     }
 
     if verbose:
-        print(f"Evaluating {len(state_0_puzzles)} puzzles...")
+        logger.info(f"Evaluating {len(state_0_puzzles)} puzzles...")
 
     for puzzle_idx, puzzle in enumerate(state_0_puzzles):
         region_board = np.array(puzzle['region'])
@@ -57,7 +61,7 @@ def evaluate_full_puzzle_capability(
 
         if 'label_board' not in puzzle:
             if verbose:
-                print(f"Puzzle {puzzle_idx} has no label_board - skipping")
+                logger.info(f"Puzzle {puzzle_idx} has no label_board - skipping")
             continue
         expected_solution = np.array(puzzle['label_board'])
 
@@ -73,7 +77,7 @@ def evaluate_full_puzzle_capability(
             edge_index_dict = solver._build_edge_index(region_board)
         except Exception as e:
             if verbose:
-                print(f"Error building edge index for puzzle {puzzle_idx}: {e}")
+                logger.error(f"Error building edge index for puzzle {puzzle_idx}: {e}")
             stats["failed_solves"] += 1
             stats["error_by_board_size"][n]["errors"] += 1
             continue
@@ -87,7 +91,7 @@ def evaluate_full_puzzle_capability(
                 node_features = node_features.to(device)
             except Exception as e:
                 if verbose:
-                    print(f"Error building features at step {step} for puzzle {puzzle_idx}: {e}")
+                    logger.error(f"Error building features at step {step} for puzzle {puzzle_idx}: {e}")
                 is_perfect = False
                 first_error_step = step
                 break
@@ -118,7 +122,7 @@ def evaluate_full_puzzle_capability(
                         logits = solver.model(x_dict, edge_index_dict_formatted)
             except Exception as e:
                 if verbose:
-                    print(f"Model inference error at step {step} for puzzle {puzzle_idx}: {e}")
+                    logger.error(f"Model inference error at step {step} for puzzle {puzzle_idx}: {e}")
                 is_perfect = False
                 first_error_step = step
                 break
@@ -154,33 +158,28 @@ def evaluate_full_puzzle_capability(
             stats["failed_solves"] += 1
 
         if verbose and (puzzle_idx + 1) % 10 == 0:
-            print(f"Processed {puzzle_idx + 1}/{len(state_0_puzzles)} puzzles")
+            logger.info(f"Processed {puzzle_idx + 1}/{len(state_0_puzzles)} puzzles")
 
     stats["success_rate"] = stats["successful_solves"] / stats["total_puzzles"] if stats["total_puzzles"] > 0 else 0
     stats["processing_time"] = time.time() - start_time
 
     if verbose:
-        print("\n" + "=" * 50)
-        print("QUEENS PUZZLE EVALUATION RESULTS")
-        print("=" * 50)
-        print(f"Total puzzles: {stats['total_puzzles']}")
-        print(f"Successful solves: {stats['successful_solves']} ({stats['success_rate']:.1%})")
-        print(f"Failed solves: {stats['failed_solves']} ({1-stats['success_rate']:.1%})")
-        print(f"Processing time: {stats['processing_time']:.2f} seconds")
+        logger.info(
+            f"Evaluation complete: {stats['successful_solves']}/{stats['total_puzzles']} solved "
+            f"({stats['success_rate']:.1%}) in {stats['processing_time']:.2f}s"
+        )
 
         if stats["error_by_step"]:
-            print("\nFirst error distribution by step:")
             for step in sorted(stats["error_by_step"].keys()):
                 count = stats["error_by_step"][step]
                 pct = count / stats["failed_solves"] if stats["failed_solves"] > 0 else 0
-                print(f"Step {step}: {count} errors ({pct:.1%} of all errors)")
+                logger.debug(f"Step {step}: {count} errors ({pct:.1%} of failures)")
 
-        print("\nPerformance by board size:")
         for size in sorted(stats["error_by_board_size"].keys()):
             data = stats["error_by_board_size"][size]
             success = data["total"] - data["errors"]
             total = data["total"]
             success_rate = success / total if total > 0 else 0
-            print(f"{size}x{size}: {success}/{total} successful ({success_rate:.1%})")
+            logger.debug(f"{size}x{size}: {success}/{total} ({success_rate:.1%})")
 
     return stats

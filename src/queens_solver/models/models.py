@@ -99,12 +99,6 @@ class HeteroGAT(nn.Module):
 
         self.mid_global_layer = max(1, layer_count // 3)
 
-        print(f" HeteroGAT configured:")
-        print(f" GAT heads: {gat_heads} (constraint-specific attention)")
-        print(f" HGT heads: {hgt_heads} (global context attention)")
-        print(f" Mid-global context at layer {self.mid_global_layer}/{layer_count}")
-        print(f" Expected to reduce Type 2 errors via enhanced global reasoning")
-
         self.conv1 = HeteroConv({
             edge_type: pyg_nn.GATConv(
                 in_channels=input_dim,
@@ -265,10 +259,7 @@ class HeteroGAT(nn.Module):
             raise ValueError(f"Layer {layer_idx} doesn't exist")
 
         attention_weights = {}
-
-        print(f"Attention extraction for layer {layer_idx} would go here")
-        print("Edge types:", list(edge_index_dict.keys()))
-
+        # TODO: Implement attention weight extraction
         return attention_weights
 
 
@@ -563,17 +554,6 @@ class HRM(nn.Module):
             ('cell', 'diagonal_constraint', 'cell')
         ]
 
-        print(f"HRM configured:")
-        print(f"Cycles: {n_cycles}, Micro-steps: {t_micro}")
-        print(f"GAT heads: {gat_heads}, HGT heads: {hgt_heads}")
-        print(f"same_size_batches: {same_size_batches}")
-        print(f"use_hmod: {use_hmod}")
-
-        if use_hmod:
-            print(f"Mode: H-module (per-graph z, attention pooling)")
-        else:
-            print(f"Mode: z-per-cycle (shared z)")
-
         self.embed = _InitialEmbed(input_dim, hidden_dim, dropout)
         self.l_block = _LBlock(
             hidden_dim=hidden_dim,
@@ -807,11 +787,6 @@ class HRM_FullSpatial(nn.Module):
             ('cell', 'region_constraint', 'cell'),
             ('cell', 'diagonal_constraint', 'cell')
         ]
-
-        print(f"HRM_FullSpatial configured:")
-        print(f"Cycles: {n_cycles}, Micro-steps: {t_micro}")
-        print(f"L-module: GNN (GAT + HGT) - local/fast")
-        print(f"H-module: Transformer - global/slow")
 
         self.embed = _InitialEmbed(input_dim, hidden_dim, dropout)
 

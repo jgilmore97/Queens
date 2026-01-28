@@ -8,7 +8,7 @@ import json
 from io import BytesIO
 from PIL import Image
 
-from solver import Solver
+from queens_solver.evaluation.solver import Solver
 
 # Configuration
 MODEL_PATH = "checkpoints/transformer/HRM/best_model.pt"

@@ -1,0 +1,9 @@
+# This directory contains the Queens puzzle datasets
+#
+# Expected files:
+#   - StateTrainingSet.json    : Training data with progressive game states
+#   - State0TrainingSet.json   : State-0 (empty board) training data
+#   - StateValSet.json         : Validation/test set for autoregressive evaluation
+#
+# Data is not included in this repository due to size.
+# See README.md for instructions on obtaining the datasets.
