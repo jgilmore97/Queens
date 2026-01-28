@@ -9,7 +9,7 @@ from typing import Dict
 from pathlib import Path
 import traceback
 
-from queens_solver.models.models import HRM_FullSpatial
+from queens_solver.models.models import HRM
 from queens_solver.data.dataset import get_combined_queens_loaders
 from queens_solver.training.trainer import FocalLoss
 from queens_solver.evaluation.evaluator import evaluate_solve_rate
@@ -32,7 +32,7 @@ def get_project_root() -> Path:
     return Path(__file__).parent.parent.parent
 
 
-def create_model_from_trial(trial: optuna.Trial, config: Config) -> HRM_FullSpatial:
+def create_model_from_trial(trial: optuna.Trial, config: Config) -> HRM:
     """Create HRM with hyperparameters sampled from trial."""
     hidden_dim = 128
     gat_heads = trial.suggest_categorical('gat_heads', [2, 4])
@@ -40,7 +40,7 @@ def create_model_from_trial(trial: optuna.Trial, config: Config) -> HRM_FullSpat
     hmod_heads = trial.suggest_categorical('hmod_heads', [4, 8])
     dropout = trial.suggest_float('dropout', 0.08, 0.3)
 
-    model = HRM_FullSpatial(
+    model = HRM(
         input_dim=config.model.input_dim,
         hidden_dim=hidden_dim,
         gat_heads=gat_heads,
@@ -99,7 +99,7 @@ def objective(
     seed: int = 42,
 ) -> float:
     """
-    Optuna objective function for HRM_FullSpatial.
+    Optuna objective function for HRM.
     Uses Config for fixed parameters, trial for hyperparameters being searched.
     Returns solve rate on validation set.
     """

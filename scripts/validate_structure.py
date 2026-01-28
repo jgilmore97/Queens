@@ -68,7 +68,7 @@ def test_imports():
 
     # Models
     try:
-        from queens_solver.models.models import GAT, HeteroGAT, HRM, HRM_FullSpatial
+        from queens_solver.models.models import GAT, HeteroGAT, HRM, HRM
         print("[OK] queens_solver.models.models")
     except ImportError as e:
         errors.append(f"queens_solver.models.models: {e}")
@@ -147,10 +147,10 @@ def test_model_instantiation():
     from queens_solver.config import Config, BASELINE_CONFIG
     config = Config(**BASELINE_CONFIG)
 
-    # HRM_FullSpatial (main model)
+    # HRM (main model)
     try:
-        from queens_solver.models.models import HRM_FullSpatial
-        model = HRM_FullSpatial(
+        from queens_solver.models.models import HRM
+        model = HRM(
             input_dim=config.model.input_dim,
             hidden_dim=config.model.hidden_dim,
             gat_heads=config.model.gat_heads,
@@ -161,10 +161,10 @@ def test_model_instantiation():
             t_micro=config.model.t_micro,
         )
         param_count = sum(p.numel() for p in model.parameters())
-        print(f"[OK] HRM_FullSpatial instantiated ({param_count:,} params)")
+        print(f"[OK] HRM instantiated ({param_count:,} params)")
     except Exception as e:
-        errors.append(f"HRM_FullSpatial: {e}")
-        print(f"[FAIL] HRM_FullSpatial: {e}")
+        errors.append(f"HRM: {e}")
+        print(f"[FAIL] HRM: {e}")
 
     # HeteroGAT
     try:

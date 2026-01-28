@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from queens_solver.models.models import HRM, HeteroGAT, GAT, HRM_FullSpatial
+from queens_solver.models.models import HRM, HeteroGAT, GAT
 
 logger = logging.getLogger(__name__)
 from queens_solver.data.dataset import build_heterogeneous_edge_index
@@ -57,7 +57,7 @@ class Solver:
                               'hgt_heads' not in model_config and
                               not is_hrm)
         if is_hrm_spatial:
-            model = HRM_FullSpatial(
+            model = HRM(
                 input_dim=model_config['input_dim'],
                 hidden_dim=model_config['hidden_dim'],
                 gat_heads=model_config.get('gat_heads', 2),
@@ -242,7 +242,7 @@ class Solver:
                 ('cell', 'diagonal_constraint', 'cell'): edge_index_dict['diagonal_constraint'],
             }
 
-            if isinstance(self.model, (HRM, HRM_FullSpatial)):
+            if isinstance(self.model, (HRM, HRM)):
                 # Need batch for HRM models
                 batch = _SingleBatch(node_features, edge_index_dict_formatted, self.device)
                 if capture_activations:
