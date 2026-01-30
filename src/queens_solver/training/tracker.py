@@ -27,8 +27,8 @@ class ExperimentTracker:
 
         self._current_lr = config.training.learning_rate
 
-        Path(config.experiment.checkpoint_dir).mkdir(exist_ok=True)
-        Path(config.experiment.log_dir).mkdir(exist_ok=True)
+        Path(config.experiment.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+        Path(config.experiment.log_dir).mkdir(parents=True, exist_ok=True)
 
         logger.debug("Experiment tracker initialized")
 
@@ -297,31 +297,18 @@ class ExperimentTracker:
             config_dict.update({
                 "gat_heads": self.config.model.gat_heads,
                 "hgt_heads": self.config.model.hgt_heads,
+                "hmod_heads": self.config.model.hmod_heads,
                 "n_cycles": self.config.model.n_cycles,
                 "t_micro": self.config.model.t_micro,
-                "use_input_injection": self.config.model.use_input_injection,
-                "z_dim": self.config.model.z_dim,
-                "use_hmod": self.config.model.use_hmod,
-                "use_batch_norm": self.config.model.use_batch_norm,
-                "same_size_batches": self.config.training.same_size_batches,
+                "learning_rate": self.config.training.learning_rate,
+                "weight_decay": self.config.training.weight_decay,
+                "focal_alpha": self.config.training.focal_alpha,
+                "focal_gamma": self.config.training.focal_gamma,
+                "cosine_t_max": self.config.training.cosine_t_max,
+                "cosine_eta_min": self.config.training.cosine_eta_min,
+                "warmup_epochs": getattr(self.config.training, 'warmup_epochs', 0),
+                "warmup_start_factor": getattr(self.config.training, 'warmup_start_factor', 0.1),
             })
-        
-        elif model_type == "HRM_FullSpatial":
-                    config_dict.update({
-                        "gat_heads": self.config.model.gat_heads,
-                        "hgt_heads": self.config.model.hgt_heads,
-                        "hmod_heads": self.config.model.hmod_heads,
-                        "n_cycles": self.config.model.n_cycles,
-                        "t_micro": self.config.model.t_micro,
-                        "learning_rate": self.config.training.learning_rate,
-                        "weight_decay": self.config.training.weight_decay,
-                        "focal_alpha": self.config.training.focal_alpha,
-                        "focal_gamma": self.config.training.focal_gamma,
-                        "cosine_t_max": self.config.training.cosine_t_max,
-                        "cosine_eta_min": self.config.training.cosine_eta_min,
-                        "warmup_epochs": getattr(self.config.training, 'warmup_epochs', 0),
-                        "warmup_start_factor": getattr(self.config.training, 'warmup_start_factor', 0.1),
-                    })
         
         elif model_type == "GNN":
             config_dict.update({

@@ -62,7 +62,7 @@ def print_summary(study: optuna.Study):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="HRM_FullSpatial Hyperparameter Sweep")
+    parser = argparse.ArgumentParser(description="HRM Hyperparameter Sweep")
     parser.add_argument('--n_trials', type=int, default=60)
     parser.add_argument('--device', type=str, default='cuda', choices=['cuda', 'cpu'])
     parser.add_argument('--train_json', type=str, default='data/StateTrainingSet.json')
@@ -79,7 +79,7 @@ def main():
         args.output = f'sweep_results_{timestamp}.json'
 
     print("=" * 60)
-    print("HRM_FullSpatial HYPERPARAMETER SWEEP")
+    print("HRM HYPERPARAMETER SWEEP")
     print("=" * 60)
     print(f"Trials: {args.n_trials}")
     print(f"Device: {args.device}")
