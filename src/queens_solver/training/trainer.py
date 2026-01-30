@@ -21,7 +21,7 @@ from queens_solver.data.dataset import (
     get_combined_queens_loaders,
 )
 from queens_solver.config import Config
-from queens_solver.models.models import GAT, HeteroGAT, HRM, HRM_FullSpatial
+from queens_solver.models.models import GAT, HeteroGAT, HRM
 from queens_solver.evaluation.evaluator import evaluate_solve_rate
 
 
@@ -801,7 +801,7 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
             solve_stats = evaluate_solve_rate(model, config.data.auto_reg_json, device)
             solve_rate = solve_stats['solve_rate']
 
-            if config.model.model_type == "HRM_FullSpatial":
+            if config.model.model_type == "HRM":
                 F1_CONVERGENCE_THRESHOLD = 0.9935
             else:
                 F1_CONVERGENCE_THRESHOLD = 0.0
@@ -983,13 +983,13 @@ def train_model_for_ablation(
         training_time = time.time() - start_time
 
     elif model_type == 'hrm_fullspatial':
-        config.model.model_type = 'HRM_FullSpatial'
+        config.model.model_type = 'HRM'
         config.model.n_cycles = config_overrides.get('n_cycles', 3)
         config.model.t_micro = config_overrides.get('t_micro', 2)
         config.training.same_size_batches = True
         config.training.drop_last = True
 
-        model = HRM_FullSpatial(
+        model = HRM(
             input_dim=config.model.input_dim,
             hidden_dim=config.model.hidden_dim,
             gat_heads=config.model.gat_heads,

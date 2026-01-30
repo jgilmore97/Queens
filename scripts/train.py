@@ -9,7 +9,7 @@ from queens_solver.models.benchmark import get_benchmark_model
 from queens_solver.training.benchmark_trainer import benchmark_training
 from queens_solver.config import Config, BASELINE_CONFIG, BenchmarkConfig
 from queens_solver.data.dataset import get_queens_loaders, get_benchmark_loaders, get_combined_queens_loaders, SizeBucketBatchSampler
-from queens_solver.models.models import GAT, HeteroGAT, HRM, HRM_FullSpatial
+from queens_solver.models.models import GAT, HeteroGAT, HRM
 from queens_solver.training.trainer import run_training_with_tracking_hetero, run_training_with_tracking
 
 def set_seed(seed=42):
@@ -150,7 +150,7 @@ def main_hrm_training():
     #     same_size_batches=hrm_config.training.same_size_batches
     # )
 
-    model = HRM_FullSpatial(
+    model = HRM(
         input_dim=hrm_config.model.input_dim,
         hidden_dim=hrm_config.model.hidden_dim,
         gat_heads=hrm_config.model.gat_heads,

@@ -21,11 +21,11 @@ RESULTS_DIR = PROJECT_ROOT / 'results'
 DATA_PATHS = {
     'multistate_train': str(PROJECT_ROOT / 'data' / 'StateTrainingSet.json'),
     'state0_train': str(PROJECT_ROOT / 'data' / 'State0TrainingSet.json'),
-    'test': str(PROJECT_ROOT / 'data' / 'FullSolveTestSet.json'),
+    'val': str(PROJECT_ROOT / 'data' / 'StateValSet.json'),
 }
 
 SHARED_CONFIG = {
-    'epochs': 12,
+    'epochs': 18,
     'batch_size': 512,
     'learning_rate': 1.5e-3,
     'weight_decay': 0.000003,
@@ -34,7 +34,7 @@ SHARED_CONFIG = {
     'focal_alpha': 0.37,
     'focal_gamma': 2.2,
     'scheduler_type': 'cosine',
-    'cosine_t_max': 12,
+    'cosine_t_max': 18,
     'cosine_eta_min': 1e-6,
     'input_dim': 14,
     'hidden_dim': 128,
@@ -207,16 +207,16 @@ def evaluate_solve_rate_homogeneous(
 
 
 def evaluate_model(model_name: str, model: torch.nn.Module, device) -> Dict:
-    print(f"\nEvaluating {model_name.upper()} on test set...")
+    print(f"\nEvaluating {model_name.upper()} on val set...")
 
-    test_path = DATA_PATHS['test']
+    val_path = DATA_PATHS['val']
 
     if model_name == 'gat':
-        results = evaluate_solve_rate_homogeneous(model, test_path, device)
+        results = evaluate_solve_rate_homogeneous(model, val_path, device)
     elif model_name in ('benchmark_hrm', 'benchmark_sequential'):
-        results = evaluate_solve_rate_benchmark(model, test_path, device)
+        results = evaluate_solve_rate_benchmark(model, val_path, device)
     else:
-        results = evaluate_solve_rate_hetero(model, test_path, device)
+        results = evaluate_solve_rate_hetero(model, val_path, device)
 
         failed_puzzles = results.get('failed_puzzles', [])
         if failed_puzzles and hasattr(failed_puzzles[0], 'source'):
@@ -346,7 +346,7 @@ def main():
     print("="*80)
     print(f"Models: {', '.join([m.upper() for m in MODELS_TO_TRAIN])}")
     print(f"Epochs: {SHARED_CONFIG['epochs']} | Batch Size: {SHARED_CONFIG['batch_size']} | LR: {SHARED_CONFIG['learning_rate']}")
-    print(f"Test Set: {DATA_PATHS['test']}")
+    print(f"Val Set: {DATA_PATHS['val']}")
     print("="*80)
 
     setup_directories()
@@ -363,7 +363,7 @@ def main():
                 model_type=model_name,
                 multistate_json=DATA_PATHS['multistate_train'],
                 state0_json=DATA_PATHS['state0_train'],
-                test_json=DATA_PATHS['test'],
+                test_json=DATA_PATHS['val'],
                 checkpoint_dir=checkpoint_dir,
                 config_overrides=SHARED_CONFIG,
                 device=device

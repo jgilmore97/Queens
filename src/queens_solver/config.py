@@ -38,7 +38,7 @@ class ModelConfig:
     gat_heads: int = 4
     hgt_heads: int = 4
 
-    model_type: str = "HRM_FullSpatial"  # "GAT", "HeteroGAT", "HRM", or "HRM_FullSpatial"
+    model_type: str = "HRM"  # "GAT", "HeteroGAT", or "HRM"
     hetero_aggr: str = "sum"
 
     # HRM-specific
