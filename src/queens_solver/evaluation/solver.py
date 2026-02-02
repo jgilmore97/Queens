@@ -364,130 +364,216 @@ class Solver:
         return top_row, top_col, top_logit
 
     def solve_puzzle(self, puzzle: dict, capture_activations: bool = False,
-                    activation_metric: str = 'l2_norm') -> Tuple:
-        """Solve a Queens puzzle autoregressively by placing n queens sequentially."""
+                    activation_metric: str = 'l2_norm',
+                    batch_placement: bool = True,
+                    confidence_threshold: float = 4.0,
+                    diagnostic: bool = False,
+                    top_k: int = 10,
+                    ground_truth: Optional[np.ndarray] = None) -> Tuple:
+        """Solve a Queens puzzle autoregressively.
+
+        Args:
+            puzzle: Dict with 'region' key containing the region board.
+            capture_activations: Whether to capture intermediate activations.
+            activation_metric: Metric for activation capture.
+            batch_placement: If True, place multiple queens per forward pass when
+                logits exceed confidence_threshold. If False, place one queen per pass.
+            confidence_threshold: Logit threshold for batch placement (only used if batch_placement=True).
+            diagnostic: If True, return detailed per-pass diagnostic info for failure analysis.
+            top_k: Number of top predictions to track per pass (only used if diagnostic=True).
+            ground_truth: Ground truth solution for correctness checking (only used if diagnostic=True).
+
+        Returns:
+            If diagnostic=False: (queen_board, placement_order) or (queen_board, placement_order, activations)
+            If diagnostic=True: dict with solution, placement_order, correct, passes, forward_pass_count
+        """
         region_board = np.array(puzzle['region'])
         n = region_board.shape[0]
         queen_board = np.zeros((n, n), dtype=int)
         edge_index_dict = self._build_edge_index(region_board)
         activations = [] if capture_activations else None
         placement_order = []
+        queens_placed = 0
+        pass_diagnostics = [] if diagnostic else None
 
-        for step in range(n):
-            if capture_activations:
-                row, col, top_logit, act_dict = self.place_queen(
-                    region_board, queen_board, edge_index_dict,
-                    capture_activations=True,
-                    activation_metric=activation_metric
-                )
+        if diagnostic and ground_truth is None:
+            ground_truth = self.solve_with_vanilla_backtracking(puzzle)
+        correct_positions = set(zip(*np.where(ground_truth == 1))) if diagnostic else None
+
+        forward_pass_count = 0
+
+        while queens_placed < n:
+            forward_pass_count += 1
+
+            need_logits = batch_placement or diagnostic
+            result = self.place_queen(
+                region_board, queen_board, edge_index_dict,
+                capture_activations=capture_activations,
+                activation_metric=activation_metric,
+                return_logits=need_logits
+            )
+
+            if capture_activations and need_logits:
+                _, _, _, act_dict, logits_np = result
                 activations.append(act_dict)
+            elif capture_activations:
+                row, col, top_logit, act_dict = result
+                activations.append(act_dict)
+                logits_np = None
+            elif need_logits:
+                _, _, _, logits_np = result
             else:
-                row, col, top_logit = self.place_queen(
-                    region_board, queen_board, edge_index_dict,
-                    capture_activations=False
+                row, col, top_logit = result
+                logits_np = None
+
+            pass_info = None
+            if diagnostic:
+                remaining_correct = correct_positions - set(placement_order)
+                flat_logits = logits_np.flatten()
+                top_k_indices = np.argsort(flat_logits)[::-1][:top_k]
+
+                top_k_predictions = []
+                first_correct_rank = None
+                for rank, idx in enumerate(top_k_indices, 1):
+                    pred_row, pred_col = idx // n, idx % n
+                    pred_logit = flat_logits[idx]
+                    is_correct = (pred_row, pred_col) in remaining_correct
+                    top_k_predictions.append({
+                        'rank': rank,
+                        'position': (pred_row, pred_col),
+                        'logit': float(pred_logit),
+                        'is_correct': is_correct
+                    })
+                    if is_correct and first_correct_rank is None:
+                        first_correct_rank = rank
+
+                pass_info = {
+                    'pass': forward_pass_count,
+                    'queens_placed_before': queens_placed,
+                    'top_k_predictions': top_k_predictions,
+                    'first_correct_rank': first_correct_rank,
+                    'remaining_correct': sorted(remaining_correct),
+                }
+
+            if batch_placement:
+                rows, cols, logits = self._get_high_confidence_placements(
+                    logits_np, queen_board, confidence_threshold
                 )
 
-            logger.debug(f"Placing queen at: ({row}, {col}) with logit score: {top_logit:.3f}")
-            placement_order.append((row, col))
-            queen_board[row, col] = 1
+                remaining = n - queens_placed
+                if len(rows) > remaining:
+                    rows, cols, logits = rows[:remaining], cols[:remaining], logits[:remaining]
+
+                queen_board[rows, cols] = 1
+                placed_positions = list(zip(rows.tolist(), cols.tolist()))
+                placement_order.extend(placed_positions)
+                queens_placed += len(rows)
+
+                if diagnostic:
+                    pass_info['queens_placed'] = placed_positions
+                    pass_info['logits_placed'] = logits.tolist()
+                    pass_info['above_threshold_count'] = int(np.sum(logits_np.flatten() > confidence_threshold))
+
+                logger.debug(f"Placed {len(rows)} queens with logits: {logits}")
+            else:
+                if logits_np is not None:
+                    valid_mask = (queen_board == 0)
+                    masked_logits = np.where(valid_mask, logits_np, -np.inf)
+                    best_idx = np.argmax(masked_logits)
+                    row, col = best_idx // n, best_idx % n
+                    top_logit = masked_logits[row, col]
+
+                if diagnostic:
+                    pass_info['queens_placed'] = [(row, col)]
+                    pass_info['logits_placed'] = [float(top_logit)]
+                    pass_info['above_threshold_count'] = 0  # N/A for single placement
+
+                logger.debug(f"Placing queen at: ({row}, {col}) with logit score: {top_logit:.3f}")
+                placement_order.append((row, col))
+                queen_board[row, col] = 1
+                queens_placed += 1
+
+            if diagnostic:
+                pass_diagnostics.append(pass_info)
+
+        if diagnostic:
+            is_correct = np.array_equal(queen_board, ground_truth)
+            return {
+                'solution': queen_board,
+                'placement_order': placement_order,
+                'correct': is_correct,
+                'forward_pass_count': forward_pass_count,
+                'passes': pass_diagnostics,
+                'activations': activations
+            }
 
         if capture_activations:
             return queen_board, placement_order, activations
         return queen_board, placement_order
 
     def solve_puzzle_diagnostic(self, puzzle: dict, ground_truth: np.ndarray = None,
-                                 top_k: int = 10, verbose: bool = True) -> dict:
-        """Solve puzzle with detailed diagnostic information for failure analysis."""
-        region_board = np.array(puzzle['region'])
-        n = region_board.shape[0]
+                                 top_k: int = 10, verbose: bool = True,
+                                 batch_placement: bool = False,
+                                 confidence_threshold: float = 4.0) -> dict:
+        """Solve puzzle with detailed diagnostic information for failure analysis.
 
-        if ground_truth is None:
-            ground_truth = self.solve_with_vanilla_backtracking(puzzle)
+        This is a convenience wrapper around solve_puzzle(diagnostic=True) that adds
+        verbose printing support.
 
-        correct_positions = set(zip(*np.where(ground_truth == 1)))
-
-        queen_board = np.zeros((n, n), dtype=int)
-        edge_index_dict = self._build_edge_index(region_board)
-        placement_order = []
-        step_diagnostics = []
-
-        for step in range(n):
-            row, col, _, logits_np = self.place_queen(
-                region_board, queen_board, edge_index_dict,
-                capture_activations=False,
-                return_logits=True
-            )
-
-            remaining_correct = correct_positions - set(placement_order)
-
-            flat_logits = logits_np.flatten()
-            top_k_indices = np.argsort(flat_logits)[::-1][:top_k]
-            top_k_predictions = []
-            first_correct_rank = None
-
-            for rank, idx in enumerate(top_k_indices, 1):
-                pred_row, pred_col = idx // n, idx % n
-                pred_logit = flat_logits[idx]
-                is_correct = (pred_row, pred_col) in remaining_correct
-                top_k_predictions.append({
-                    'rank': rank,
-                    'position': (pred_row, pred_col),
-                    'logit': float(pred_logit),
-                    'is_correct': is_correct
-                })
-                if is_correct and first_correct_rank is None:
-                    first_correct_rank = rank
-
-            step_info = {
-                'step': step + 1,
-                'queens_placed': list(placement_order),
-                'remaining_correct': sorted(remaining_correct),
-                'top_k_predictions': top_k_predictions,
-                'first_correct_rank': first_correct_rank,
-                'placement': (row, col)
-            }
-            step_diagnostics.append(step_info)
-
-            if verbose:
-                self._print_step_diagnostic(step_info)
-
-            placement_order.append((row, col))
-            queen_board[row, col] = 1
-
-        is_correct = np.array_equal(queen_board, ground_truth)
+        Args:
+            puzzle: Dict with 'region' key containing the region board.
+            ground_truth: Ground truth solution. If None, computed via backtracking.
+            top_k: Number of top predictions to track per pass.
+            verbose: If True, print step-by-step diagnostic output.
+            batch_placement: If True, place multiple queens per pass when confident.
+            confidence_threshold: Logit threshold for batch placement.
+        """
+        result = self.solve_puzzle(
+            puzzle,
+            batch_placement=batch_placement,
+            confidence_threshold=confidence_threshold,
+            diagnostic=True,
+            top_k=top_k,
+            ground_truth=ground_truth
+        )
 
         if verbose:
+            for pass_info in result['passes']:
+                self._print_pass_diagnostic(pass_info, batch_placement)
+
             print(f"\n{'='*50}")
-            print(f"FINAL RESULT: {'✓ CORRECT' if is_correct else '✗ INCORRECT'}")
+            print(f"FINAL RESULT: {'✓ CORRECT' if result['correct'] else '✗ INCORRECT'}")
+            print(f"Forward passes: {result['forward_pass_count']}")
             print(f"{'='*50}")
 
-        return {
-            'solution': queen_board,
-            'placement_order': placement_order,
-            'correct': is_correct,
-            'steps': step_diagnostics
-        }
+        result['steps'] = result['passes']
+        return result
 
-    def _print_step_diagnostic(self, step_info: dict) -> None:
-        """Print formatted diagnostic output for a single step."""
-        print(f"\n=== STEP {step_info['step']} ===")
-        print(f"Queens placed so far: {step_info['queens_placed']}")
-        print(f"Remaining correct positions: {step_info['remaining_correct']}")
-        print(f"Top {len(step_info['top_k_predictions'])} predictions:")
+    def _print_pass_diagnostic(self, pass_info: dict, batch_placement: bool = False) -> None:
+        """Print formatted diagnostic output for a single forward pass."""
+        print(f"\n=== PASS {pass_info['pass']} ===")
+        print(f"Queens placed before this pass: {pass_info['queens_placed_before']}")
+        print(f"Remaining correct positions: {pass_info['remaining_correct']}")
+        print(f"Top {len(pass_info['top_k_predictions'])} predictions:")
 
-        for pred in step_info['top_k_predictions']:
+        for pred in pass_info['top_k_predictions']:
             pos = pred['position']
             logit = pred['logit']
             marker = '✓' if pred['is_correct'] else '✗'
             print(f"  Rank {pred['rank']:2d}: ({pos[0]},{pos[1]}) logit={logit:6.3f} {marker}")
 
-        if step_info['first_correct_rank'] is not None:
-            print(f"First correct position appears at rank: {step_info['first_correct_rank']}")
+        if pass_info['first_correct_rank'] is not None:
+            print(f"First correct position appears at rank: {pass_info['first_correct_rank']}")
         else:
             print(f"First correct position appears at rank: >top-k")
 
-        row, col = step_info['placement']
-        print(f"Placing queen at model's top choice: ({row}, {col})")
+        queens_placed = pass_info['queens_placed']
+        logits_placed = pass_info['logits_placed']
+        if batch_placement:
+            print(f"Above threshold count: {pass_info['above_threshold_count']}")
+        print(f"Placed {len(queens_placed)} queen(s) this pass:")
+        for (r, c), logit in zip(queens_placed, logits_placed):
+            print(f"  ({r},{c}) logit={logit:.3f}")
 
     @staticmethod
     def solve_with_vanilla_backtracking(puzzle: dict):
@@ -503,6 +589,39 @@ class Solver:
             edge_index_dict[edge_type] = edge_index.to(self.device)
 
         return edge_index_dict
+
+    def _get_high_confidence_placements(
+        self,
+        logits_np: np.ndarray,
+        queen_board: np.ndarray,
+        threshold: float = 4.0
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Get all high-confidence placements above threshold.
+
+        Returns:
+            rows, cols, logits as numpy arrays (sorted by logit descending)
+        """
+        n = logits_np.shape[0]
+
+        # Mask already-occupied cells
+        valid_mask = (queen_board == 0)
+        masked_logits = np.where(valid_mask, logits_np, -np.inf)
+
+        # Get candidates above threshold
+        high_conf_mask = masked_logits > threshold
+
+        if np.any(high_conf_mask):
+            # Get ALL cells above threshold
+            rows, cols = np.where(high_conf_mask)
+            logit_values = logits_np[rows, cols]
+            # Sort by logit descending
+            sorted_indices = np.argsort(-logit_values)
+            return rows[sorted_indices], cols[sorted_indices], logit_values[sorted_indices]
+        else:
+            # Fallback: single best cell
+            best_idx = np.argmax(masked_logits)
+            row, col = best_idx // n, best_idx % n
+            return np.array([row]), np.array([col]), np.array([masked_logits[row, col]])
 
 
     def visualize_solution(self, puzzle: dict, solution: np.ndarray,
