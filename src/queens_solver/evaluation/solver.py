@@ -603,22 +603,17 @@ class Solver:
         """
         n = logits_np.shape[0]
 
-        # Mask already-occupied cells
         valid_mask = (queen_board == 0)
         masked_logits = np.where(valid_mask, logits_np, -np.inf)
 
-        # Get candidates above threshold
         high_conf_mask = masked_logits > threshold
 
         if np.any(high_conf_mask):
-            # Get ALL cells above threshold
             rows, cols = np.where(high_conf_mask)
             logit_values = logits_np[rows, cols]
-            # Sort by logit descending
             sorted_indices = np.argsort(-logit_values)
             return rows[sorted_indices], cols[sorted_indices], logit_values[sorted_indices]
         else:
-            # Fallback: single best cell
             best_idx = np.argmax(masked_logits)
             row, col = best_idx // n, best_idx % n
             return np.array([row]), np.array([col]), np.array([masked_logits[row, col]])
