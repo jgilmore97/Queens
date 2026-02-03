@@ -9,6 +9,7 @@ import torch
 from PIL import Image
 
 from queens_solver.models.models import HRM, HeteroGAT, GAT
+from queens_solver.models.benchmark import BenchmarkHRM, BenchmarkSequential
 
 logger = logging.getLogger(__name__)
 from queens_solver.data.dataset import build_heterogeneous_edge_index
@@ -18,7 +19,7 @@ from queens_solver.data.preprocessing import solve_queens
 class _SingleBatch:
     """Minimal batch wrapper for single-puzzle inference with HRM models."""
     __slots__ = ('x_dict', 'edge_index_dict', 'num_graphs', '_cell')
-    
+
     def __init__(self, x: torch.Tensor, edge_dict: Dict, device):
         self.x_dict = {'cell': x}
         self.edge_index_dict = edge_dict
@@ -28,7 +29,7 @@ class _SingleBatch:
             'batch': torch.zeros(x.shape[0], dtype=torch.long, device=device),
             'num_nodes': x.shape[0]
         })()
-    
+
     def __getitem__(self, key):
         if key == 'cell':
             return self._cell
@@ -38,6 +39,7 @@ class _SingleBatch:
 class Solver:
     def __init__(self, model_path, device: str = 'cuda'):
         self.device = device
+        self.is_benchmark = False
         self.model, self.is_heterogeneous = self.load_model(model_path)
         self.model = self.model.to(device)
         self.max_regions = 11
@@ -47,16 +49,59 @@ class Solver:
         checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
         model_config = checkpoint['config_dict']
         state_dict = checkpoint['model_state_dict']
-    
-        has_h_block = any(k.startswith('h_block.') for k in state_dict.keys())
+
+        model_type = model_config.get('model_type', '')
+
+        has_lowercase_l_block = any(k.startswith('l_block.') for k in state_dict.keys())
+        has_lowercase_h_block = any(k.startswith('h_block.') for k in state_dict.keys())
+        has_uppercase_L_block = any(k.startswith('L_block.') for k in state_dict.keys())
+        has_uppercase_H_block = any(k.startswith('H_block.') for k in state_dict.keys())
+        has_numbered_layers = any(k.startswith('layers.') for k in state_dict.keys())
         has_z_H_init = 'z_H_init' in state_dict
-        is_hrm_spatial = has_h_block and has_z_H_init
-        is_hrm = model_config.get('model_type') == 'HRM' or 'n_cycles' in model_config
+        has_gat_heads = 'gat_heads' in model_config
+
+        is_benchmark_sequential = (model_type == 'benchmark_sequential' or
+                                   (has_numbered_layers and not has_uppercase_L_block and not has_uppercase_H_block) or
+                                   ('layers' in model_config and not has_gat_heads and 'n_cycles' not in model_config))
+
+        is_benchmark_hrm = (model_type == 'benchmark_hrm' or
+                           has_uppercase_L_block or has_uppercase_H_block or
+                           ('n_cycles' in model_config and not has_gat_heads and not has_lowercase_l_block)) and not is_benchmark_sequential
+
+        is_hrm_spatial = has_lowercase_h_block and has_z_H_init and has_lowercase_l_block
+        is_hrm = (model_type == 'HRM' or 'n_cycles' in model_config) and has_gat_heads and not is_benchmark_hrm
 
         is_homogeneous_gat = ('layer_count' in model_config and
                               'hgt_heads' not in model_config and
-                              not is_hrm)
-        if is_hrm_spatial:
+                              not is_hrm and not is_hrm_spatial and
+                              not is_benchmark_hrm and not is_benchmark_sequential)
+
+        if is_benchmark_sequential:
+            model = BenchmarkSequential(
+                input_dim=model_config.get('input_dim', 14),
+                hidden_dim=model_config.get('hidden_dim', 128),
+                p_drop=model_config.get('dropout', 0.1),
+                n_heads=model_config.get('n_heads', 4),
+                layers=model_config.get('layers', 6)
+            )
+            logger.debug("Loaded BenchmarkSequential solver")
+            is_heterogeneous = False
+            self.is_benchmark = True
+
+        elif is_benchmark_hrm:
+            model = BenchmarkHRM(
+                input_dim=model_config.get('input_dim', 14),
+                hidden_dim=model_config.get('hidden_dim', 128),
+                p_drop=model_config.get('dropout', 0.1),
+                n_heads=model_config.get('n_heads', 4),
+                n_cycles=model_config.get('n_cycles', 3),
+                t_micro=model_config.get('t_micro', 2)
+            )
+            logger.debug(f"Loaded BenchmarkHRM solver (cycles={model_config.get('n_cycles', 3)}, t_micro={model_config.get('t_micro', 2)})")
+            is_heterogeneous = False
+            self.is_benchmark = True
+
+        elif is_hrm_spatial:
             model = HRM(
                 input_dim=model_config['input_dim'],
                 hidden_dim=model_config['hidden_dim'],
@@ -69,6 +114,7 @@ class Solver:
             )
             logger.debug(f"Loaded HRM Full Spatial solver (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)})")
             is_heterogeneous = True
+            self.is_benchmark = False
 
         elif is_hrm:
             model = HRM(
@@ -76,18 +122,15 @@ class Solver:
                 hidden_dim=model_config['hidden_dim'],
                 gat_heads=model_config.get('gat_heads', 2),
                 hgt_heads=model_config.get('hgt_heads', 4),
+                hmod_heads=model_config.get('hmod_heads', 4),
                 dropout=model_config.get('dropout', 0.2),
-                use_batch_norm=model_config.get('use_batch_norm', False),
                 n_cycles=model_config.get('n_cycles', 3),
                 t_micro=model_config.get('t_micro', 2),
-                use_input_injection=model_config.get('use_input_injection', True),
-                z_dim=model_config.get('z_dim', 128),
-                use_hmod=model_config.get('use_hmod', False),
-                same_size_batches=model_config.get('same_size_batches', False)
             )
             logger.debug(f"Loaded HRM solver (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)})")
             is_heterogeneous = True
-            
+            self.is_benchmark = False
+
         elif is_homogeneous_gat:
             model = GAT(
                 input_dim=model_config['input_dim'],
@@ -96,8 +139,9 @@ class Solver:
                 dropout=model_config['dropout'],
                 heads=model_config.get('gat_heads', 2)
             )
-            logger.debug(f"Loaded Homogeneous GAT solver")
+            logger.debug("Loaded Homogeneous GAT solver")
             is_heterogeneous = False
+            self.is_benchmark = False
         else:
             model = HeteroGAT(
                 input_dim=model_config['input_dim'],
@@ -107,8 +151,9 @@ class Solver:
                 gat_heads=model_config['gat_heads'],
                 hgt_heads=model_config['hgt_heads']
             )
-            logger.debug(f"Loaded HeteroGAT solver")
+            logger.debug("Loaded HeteroGAT solver")
             is_heterogeneous = True
+            self.is_benchmark = False
 
         model.load_state_dict(checkpoint['model_state_dict'])
 
@@ -117,8 +162,22 @@ class Solver:
 
         return model, is_heterogeneous
 
-    def _build_node_features(self, region_board: np.ndarray, queen_board: np.ndarray) -> torch.Tensor:
+    def _pad_board(self, board: np.ndarray, target_size: int, pad_value: int) -> np.ndarray:
+        """Pad a board to target_size x target_size."""
+        n = board.shape[0]
+        if n >= target_size:
+            return board
+        padded = np.full((target_size, target_size), pad_value, dtype=board.dtype)
+        padded[:n, :n] = board
+        return padded
+
+    def _build_node_features(self, region_board: np.ndarray, queen_board: np.ndarray,
+                              pad_for_benchmark: bool = False) -> torch.Tensor:
         """Build node feature vectors combining normalized coordinates, one-hot region encoding, and queen flags."""
+        if pad_for_benchmark:
+            region_board = self._pad_board(region_board, self.max_regions, pad_value=-1)
+            queen_board = self._pad_board(queen_board, self.max_regions, pad_value=0)
+
         n = region_board.shape[0]
         N2 = n * n
 
@@ -126,7 +185,8 @@ class Solver:
 
         reg_onehot = np.zeros((N2, self.max_regions), dtype=np.float32)
         flat_ids = region_board.flatten()
-        reg_onehot[np.arange(N2), flat_ids] = 1.0
+        valid_mask = flat_ids >= 0
+        reg_onehot[valid_mask, flat_ids[valid_mask]] = 1.0
 
         has_queen = queen_board.flatten()[:, None].astype(np.float32)
 
@@ -139,13 +199,13 @@ class Solver:
         """Convert HRM intermediates to per-cycle activation heatmaps."""
         L_states = intermediates['L_states']
         H_states = intermediates.get('H_states', None)
-        
+
         num_L = len(L_states)
-        t_micro = 2 
+        t_micro = 2
         n_cycles = num_L // t_micro
 
         result = {'L': {}}
-        
+
         if n_cycles >= 3:
             result['L']['early'] = self._compute_cycle_activation(L_states[0:2], n, activation_metric)
             result['L']['mid'] = self._compute_cycle_activation(L_states[2:4], n, activation_metric)
@@ -199,19 +259,19 @@ class Solver:
     def _compute_cycle_activation(self, state_list: List[torch.Tensor], n: int,
                                  activation_metric: str = 'l2_norm') -> np.ndarray:
         """Compute per-cell activation from L-states, averaged across timesteps and reshaped to [n, n]."""
-        stacked = torch.stack(state_list, dim=0)  # [T, C, d]
-        mean_state = stacked.mean(dim=0)  # [C, d]
+        stacked = torch.stack(state_list, dim=0)
+        mean_state = stacked.mean(dim=0)
 
         if activation_metric == 'l2_norm':
-            activations = torch.norm(mean_state, dim=1)  # [C]
+            activations = torch.norm(mean_state, dim=1)
         elif activation_metric == 'mean_embedding':
-            activations = mean_state.mean(dim=1)  # [C]
+            activations = mean_state.mean(dim=1)
         elif activation_metric == 'max_embedding':
-            activations = torch.max(torch.abs(mean_state), dim=1)[0]  # [C]
+            activations = torch.max(torch.abs(mean_state), dim=1)[0]
         else:
             raise ValueError(f"Unknown activation_metric: {activation_metric}")
 
-        heatmap = activations.cpu().numpy().reshape(n, n)  # [n, n]
+        heatmap = activations.cpu().numpy().reshape(n, n)
 
         if activation_metric == 'mean_embedding':
             heatmap_abs_max = np.max(np.abs(heatmap))
@@ -228,35 +288,65 @@ class Solver:
     def place_queen(self, region_board: np.ndarray, partial_board: np.ndarray,
                     edge_index_dict: Dict[str, torch.Tensor],
                     capture_activations: bool = False,
-                    activation_metric: str = 'l2_norm') -> Tuple:
+                    activation_metric: str = 'l2_norm',
+                    return_logits: bool = False) -> Tuple:
         """Place a queen at the highest-scoring cell using model predictions."""
         n = region_board.shape[0]
-
-        node_features = self._build_node_features(region_board, partial_board)
-        node_features = node_features.to(self.device)
+        activation_dict = None
 
         with torch.no_grad():
-            edge_index_dict_formatted = {
-                ('cell', 'line_constraint', 'cell'): edge_index_dict['line_constraint'],
-                ('cell', 'region_constraint', 'cell'): edge_index_dict['region_constraint'],
-                ('cell', 'diagonal_constraint', 'cell'): edge_index_dict['diagonal_constraint'],
-            }
+            if getattr(self, 'is_benchmark', False):
+                node_features = self._build_node_features(region_board, partial_board, pad_for_benchmark=True)
+                node_features = node_features.to(self.device)
+                x_batched = node_features.unsqueeze(0)
+                logits = self.model(x_batched)
+                logits = logits.squeeze(0).squeeze(-1)
+                logits_padded = logits.cpu().numpy().reshape(self.max_regions, self.max_regions)
+                logits_np = logits_padded[:n, :n]
 
-            if isinstance(self.model, (HRM, HRM)):
-                # Need batch for HRM models
+            elif isinstance(self.model, HRM):
+                node_features = self._build_node_features(region_board, partial_board)
+                node_features = node_features.to(self.device)
+                edge_index_dict_formatted = {
+                    ('cell', 'line_constraint', 'cell'): edge_index_dict['line_constraint'],
+                    ('cell', 'region_constraint', 'cell'): edge_index_dict['region_constraint'],
+                    ('cell', 'diagonal_constraint', 'cell'): edge_index_dict['diagonal_constraint'],
+                }
                 batch = _SingleBatch(node_features, edge_index_dict_formatted, self.device)
                 if capture_activations:
                     logits, intermediates = self.model(batch, return_intermediates=True)
                     activation_dict = self._process_intermediates(intermediates, n, activation_metric)
                 else:
                     logits = self.model(batch)
-                    activation_dict = None
-            else:
-                x_dict = {'cell': node_features}
-                logits = self.model(x_dict, edge_index_dict_formatted)
-                activation_dict = None
+                logits_np = logits.cpu().numpy().reshape(n, n)
 
-        logits_np = logits.cpu().numpy().reshape(n, n)
+            elif isinstance(self.model, HeteroGAT):
+                node_features = self._build_node_features(region_board, partial_board)
+                node_features = node_features.to(self.device)
+                edge_index_dict_formatted = {
+                    ('cell', 'line_constraint', 'cell'): edge_index_dict['line_constraint'],
+                    ('cell', 'region_constraint', 'cell'): edge_index_dict['region_constraint'],
+                    ('cell', 'diagonal_constraint', 'cell'): edge_index_dict['diagonal_constraint'],
+                }
+                batch = _SingleBatch(node_features, edge_index_dict_formatted, self.device)
+                logits = self.model(batch)
+                logits_np = logits.cpu().numpy().reshape(n, n)
+
+            elif isinstance(self.model, GAT):
+                node_features = self._build_node_features(region_board, partial_board)
+                node_features = node_features.to(self.device)
+                edge_indices = [
+                    edge_index_dict['line_constraint'],
+                    edge_index_dict['region_constraint'],
+                    edge_index_dict['diagonal_constraint'],
+                ]
+                combined_edge_index = torch.cat(edge_indices, dim=1)
+                logits = self.model(node_features, combined_edge_index)
+                logits_np = logits.cpu().numpy().reshape(n, n)
+
+            else:
+                raise ValueError(f"Unknown model type: {type(self.model)}")
+
         flat_logits = logits_np.flatten()
         top_idx = np.argmax(flat_logits)
         top_logit = flat_logits[top_idx]
@@ -265,39 +355,225 @@ class Solver:
         if capture_activations and activation_dict is not None:
             activation_dict['placement'] = (top_row, top_col)
             activation_dict['logit'] = float(top_logit)
+            if return_logits:
+                return top_row, top_col, top_logit, activation_dict, logits_np
             return top_row, top_col, top_logit, activation_dict
 
+        if return_logits:
+            return top_row, top_col, top_logit, logits_np
         return top_row, top_col, top_logit
 
     def solve_puzzle(self, puzzle: dict, capture_activations: bool = False,
-                    activation_metric: str = 'l2_norm') -> Tuple:
-        """Solve a Queens puzzle autoregressively by placing n queens sequentially."""
-        region_board = np.array(puzzle['region'])  # [n, n]
+                    activation_metric: str = 'l2_norm',
+                    batch_placement: bool = True,
+                    confidence_threshold: float = 4.0,
+                    diagnostic: bool = False,
+                    top_k: int = 10,
+                    ground_truth: Optional[np.ndarray] = None) -> Tuple:
+        """Solve a Queens puzzle autoregressively.
+
+        Args:
+            puzzle: Dict with 'region' key containing the region board.
+            capture_activations: Whether to capture intermediate activations.
+            activation_metric: Metric for activation capture.
+            batch_placement: If True, place multiple queens per forward pass when
+                logits exceed confidence_threshold. If False, place one queen per pass.
+            confidence_threshold: Logit threshold for batch placement (only used if batch_placement=True).
+            diagnostic: If True, return detailed per-pass diagnostic info for failure analysis.
+            top_k: Number of top predictions to track per pass (only used if diagnostic=True).
+            ground_truth: Ground truth solution for correctness checking (only used if diagnostic=True).
+
+        Returns:
+            If diagnostic=False: (queen_board, placement_order) or (queen_board, placement_order, activations)
+            If diagnostic=True: dict with solution, placement_order, correct, passes, forward_pass_count
+        """
+        region_board = np.array(puzzle['region'])
         n = region_board.shape[0]
-        queen_board = np.zeros((n, n), dtype=int)  # [n, n]
+        queen_board = np.zeros((n, n), dtype=int)
         edge_index_dict = self._build_edge_index(region_board)
         activations = [] if capture_activations else None
+        placement_order = []
+        queens_placed = 0
+        pass_diagnostics = [] if diagnostic else None
 
-        for step in range(n):
-            if capture_activations:
-                row, col, top_logit, act_dict = self.place_queen(
-                    region_board, queen_board, edge_index_dict,
-                    capture_activations=True,
-                    activation_metric=activation_metric
-                )
+        if diagnostic and ground_truth is None:
+            ground_truth = self.solve_with_vanilla_backtracking(puzzle)
+        correct_positions = set(zip(*np.where(ground_truth == 1))) if diagnostic else None
+
+        forward_pass_count = 0
+
+        while queens_placed < n:
+            forward_pass_count += 1
+
+            need_logits = batch_placement or diagnostic
+            result = self.place_queen(
+                region_board, queen_board, edge_index_dict,
+                capture_activations=capture_activations,
+                activation_metric=activation_metric,
+                return_logits=need_logits
+            )
+
+            if capture_activations and need_logits:
+                _, _, _, act_dict, logits_np = result
                 activations.append(act_dict)
+            elif capture_activations:
+                row, col, top_logit, act_dict = result
+                activations.append(act_dict)
+                logits_np = None
+            elif need_logits:
+                _, _, _, logits_np = result
             else:
-                row, col, top_logit = self.place_queen(
-                    region_board, queen_board, edge_index_dict,
-                    capture_activations=False
+                row, col, top_logit = result
+                logits_np = None
+
+            pass_info = None
+            if diagnostic:
+                remaining_correct = correct_positions - set(placement_order)
+                flat_logits = logits_np.flatten()
+                top_k_indices = np.argsort(flat_logits)[::-1][:top_k]
+
+                top_k_predictions = []
+                first_correct_rank = None
+                for rank, idx in enumerate(top_k_indices, 1):
+                    pred_row, pred_col = idx // n, idx % n
+                    pred_logit = flat_logits[idx]
+                    is_correct = (pred_row, pred_col) in remaining_correct
+                    top_k_predictions.append({
+                        'rank': rank,
+                        'position': (pred_row, pred_col),
+                        'logit': float(pred_logit),
+                        'is_correct': is_correct
+                    })
+                    if is_correct and first_correct_rank is None:
+                        first_correct_rank = rank
+
+                pass_info = {
+                    'pass': forward_pass_count,
+                    'queens_placed_before': queens_placed,
+                    'top_k_predictions': top_k_predictions,
+                    'first_correct_rank': first_correct_rank,
+                    'remaining_correct': sorted(remaining_correct),
+                }
+
+            if batch_placement:
+                rows, cols, logits = self._get_high_confidence_placements(
+                    logits_np, queen_board, confidence_threshold
                 )
 
-            logger.debug(f"Placing queen at: ({row}, {col}) with logit score: {top_logit:.3f}")
-            queen_board[row, col] = 1
+                remaining = n - queens_placed
+                if len(rows) > remaining:
+                    rows, cols, logits = rows[:remaining], cols[:remaining], logits[:remaining]
+
+                queen_board[rows, cols] = 1
+                placed_positions = list(zip(rows.tolist(), cols.tolist()))
+                placement_order.extend(placed_positions)
+                queens_placed += len(rows)
+
+                if diagnostic:
+                    pass_info['queens_placed'] = placed_positions
+                    pass_info['logits_placed'] = logits.tolist()
+                    pass_info['above_threshold_count'] = int(np.sum(logits_np.flatten() > confidence_threshold))
+
+                logger.debug(f"Placed {len(rows)} queens with logits: {logits}")
+            else:
+                if logits_np is not None:
+                    valid_mask = (queen_board == 0)
+                    masked_logits = np.where(valid_mask, logits_np, -np.inf)
+                    best_idx = np.argmax(masked_logits)
+                    row, col = best_idx // n, best_idx % n
+                    top_logit = masked_logits[row, col]
+
+                if diagnostic:
+                    pass_info['queens_placed'] = [(row, col)]
+                    pass_info['logits_placed'] = [float(top_logit)]
+                    pass_info['above_threshold_count'] = 0  # N/A for single placement
+
+                logger.debug(f"Placing queen at: ({row}, {col}) with logit score: {top_logit:.3f}")
+                placement_order.append((row, col))
+                queen_board[row, col] = 1
+                queens_placed += 1
+
+            if diagnostic:
+                pass_diagnostics.append(pass_info)
+
+        if diagnostic:
+            is_correct = np.array_equal(queen_board, ground_truth)
+            return {
+                'solution': queen_board,
+                'placement_order': placement_order,
+                'correct': is_correct,
+                'forward_pass_count': forward_pass_count,
+                'passes': pass_diagnostics,
+                'activations': activations
+            }
 
         if capture_activations:
-            return queen_board, activations
-        return queen_board
+            return queen_board, placement_order, activations
+        return queen_board, placement_order
+
+    def solve_puzzle_diagnostic(self, puzzle: dict, ground_truth: np.ndarray = None,
+                                 top_k: int = 10, verbose: bool = True,
+                                 batch_placement: bool = False,
+                                 confidence_threshold: float = 4.0) -> dict:
+        """Solve puzzle with detailed diagnostic information for failure analysis.
+
+        This is a convenience wrapper around solve_puzzle(diagnostic=True) that adds
+        verbose printing support.
+
+        Args:
+            puzzle: Dict with 'region' key containing the region board.
+            ground_truth: Ground truth solution. If None, computed via backtracking.
+            top_k: Number of top predictions to track per pass.
+            verbose: If True, print step-by-step diagnostic output.
+            batch_placement: If True, place multiple queens per pass when confident.
+            confidence_threshold: Logit threshold for batch placement.
+        """
+        result = self.solve_puzzle(
+            puzzle,
+            batch_placement=batch_placement,
+            confidence_threshold=confidence_threshold,
+            diagnostic=True,
+            top_k=top_k,
+            ground_truth=ground_truth
+        )
+
+        if verbose:
+            for pass_info in result['passes']:
+                self._print_pass_diagnostic(pass_info, batch_placement)
+
+            print(f"\n{'='*50}")
+            print(f"FINAL RESULT: {'✓ CORRECT' if result['correct'] else '✗ INCORRECT'}")
+            print(f"Forward passes: {result['forward_pass_count']}")
+            print(f"{'='*50}")
+
+        result['steps'] = result['passes']
+        return result
+
+    def _print_pass_diagnostic(self, pass_info: dict, batch_placement: bool = False) -> None:
+        """Print formatted diagnostic output for a single forward pass."""
+        print(f"\n=== PASS {pass_info['pass']} ===")
+        print(f"Queens placed before this pass: {pass_info['queens_placed_before']}")
+        print(f"Remaining correct positions: {pass_info['remaining_correct']}")
+        print(f"Top {len(pass_info['top_k_predictions'])} predictions:")
+
+        for pred in pass_info['top_k_predictions']:
+            pos = pred['position']
+            logit = pred['logit']
+            marker = '✓' if pred['is_correct'] else '✗'
+            print(f"  Rank {pred['rank']:2d}: ({pos[0]},{pos[1]}) logit={logit:6.3f} {marker}")
+
+        if pass_info['first_correct_rank'] is not None:
+            print(f"First correct position appears at rank: {pass_info['first_correct_rank']}")
+        else:
+            print(f"First correct position appears at rank: >top-k")
+
+        queens_placed = pass_info['queens_placed']
+        logits_placed = pass_info['logits_placed']
+        if batch_placement:
+            print(f"Above threshold count: {pass_info['above_threshold_count']}")
+        print(f"Placed {len(queens_placed)} queen(s) this pass:")
+        for (r, c), logit in zip(queens_placed, logits_placed):
+            print(f"  ({r},{c}) logit={logit:.3f}")
 
     @staticmethod
     def solve_with_vanilla_backtracking(puzzle: dict):
@@ -313,6 +589,34 @@ class Solver:
             edge_index_dict[edge_type] = edge_index.to(self.device)
 
         return edge_index_dict
+
+    def _get_high_confidence_placements(
+        self,
+        logits_np: np.ndarray,
+        queen_board: np.ndarray,
+        threshold: float = 4.0
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Get all high-confidence placements above threshold.
+
+        Returns:
+            rows, cols, logits as numpy arrays (sorted by logit descending)
+        """
+        n = logits_np.shape[0]
+
+        valid_mask = (queen_board == 0)
+        masked_logits = np.where(valid_mask, logits_np, -np.inf)
+
+        high_conf_mask = masked_logits > threshold
+
+        if np.any(high_conf_mask):
+            rows, cols = np.where(high_conf_mask)
+            logit_values = logits_np[rows, cols]
+            sorted_indices = np.argsort(-logit_values)
+            return rows[sorted_indices], cols[sorted_indices], logit_values[sorted_indices]
+        else:
+            best_idx = np.argmax(masked_logits)
+            row, col = best_idx // n, best_idx % n
+            return np.array([row]), np.array([col]), np.array([masked_logits[row, col]])
 
 
     def visualize_solution(self, puzzle: dict, solution: np.ndarray,
@@ -344,7 +648,7 @@ class Solver:
             fig, axes = plt.subplots(1, num_cols, figsize=(5 * num_cols, 5))
             if num_cols == 1:
                 axes = [axes]
-            
+
             fig.suptitle(f"Queen {step_idx + 1}/{num_placements}: Placement ({row}, {col}) | Logit: {logit:.3f}",
                         fontsize=14, fontweight='bold')
 
@@ -356,13 +660,13 @@ class Solver:
             col_idx = 1
             for stage_name, heatmap in L_maps.items():
                 ax = axes[col_idx]
-                self._draw_heatmap(ax, heatmap, n, f"L-{stage_name.capitalize()}", 
+                self._draw_heatmap(ax, heatmap, n, f"L-{stage_name.capitalize()}",
                                    placed_queens, row, col)
                 col_idx += 1
 
             for stage_name, heatmap in H_maps.items():
                 ax = axes[col_idx]
-                self._draw_heatmap(ax, heatmap, n, f"H-{stage_name.capitalize()}", 
+                self._draw_heatmap(ax, heatmap, n, f"H-{stage_name.capitalize()}",
                                    placed_queens, row, col, cmap='PuOr_r')
                 col_idx += 1
 
@@ -471,6 +775,6 @@ class Solver:
         return overlay
 
     def evaluate_solver(self, puzzle: dict) -> bool:
-        model_solution = self.solve_puzzle(puzzle)
+        model_solution, _ = self.solve_puzzle(puzzle)
         backtrack_solution = self.solve_with_vanilla_backtracking(puzzle)
         return np.array_equal(model_solution, backtrack_solution)

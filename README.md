@@ -1,100 +1,76 @@
 # Queens Puzzle ML Solver
 
-A machine learning approach to solving Queens puzzle games using Graph Neural Networks with heterogeneous constraint modeling.
+A machine learning approach to solving Queens puzzle games using Graph Neural Networks with hierarchical constraint reasoning.
 
 ## Project Overview
 
-Queens is a logic puzzle where players place n queens on an n×n colored board following these constraints:
+Queens is a logic puzzle where players place n queens on an n×n colored board. Each queen must be the only one in its row, the only one in its column, the only one in its color region, and cannot touch any other queen diagonally. The puzzle always has exactly one valid solution.
 
-- One queen per row and column
-- One queen per color region
-- No queens can touch diagonally (immediate adjacent diagonals only)
+This project trains a Hierarchical Reasoning Model (HRM) to predict optimal queen placements autoregressively without backtracking. The model learns to reason about local constraints through graph attention and global board state through hierarchical context aggregation.
 
-This project trains a **Hierarchical Reasoning Model (HRM)** to predict optimal queen placements autoregressively without backtracking. The model operates through two complementary mechanisms: a fast local constraint reasoner (L-module) and a slower global context builder (H-module) that iteratively refine predictions across multiple cycles.
+## Development Progression
+
+The path to the final architecture followed an iterative process of identifying limitations and addressing them with increasingly sophisticated methods.
+
+**Problem Scoping.** The core challenge in Queens is distinguishing between moves that are locally legal but globally invalid (leading to dead ends) versus moves that are part of a valid solution path. A cell might satisfy all immediate constraints (no queen in its row, column, region, or diagonal neighbors) while still being a wrong choice because it eliminates all valid placements for some future queen. Detecting this requires reasoning about the entire board state, not just local neighborhoods.
+
+**Graph Representation.** The decision to represent the board as a graph came from recognizing that the constraints are relational. Row and column constraints connect cells linearly, region constraints connect irregularly shaped groups, and diagonal constraints connect adjacent corners. Rather than forcing a CNN to learn these relationships implicitly from spatial position, encoding them explicitly as edges lets the model learn specialized attention patterns for each constraint type. The graph has one node per cell with three edge types: line constraints (same row or column), region constraints (same color region), and diagonal constraints (immediate diagonal adjacency).
+
+**GAT.** The first model used standard Graph Attention Networks over a homogeneous graph. This established the basic approach of learning attention-weighted message passing between constrained cells, but treated all constraints identically. The model achieved about 76% F1 on single-state prediction and solved only 45% of puzzles end-to-end. The failure pattern showed errors distributed throughout the solve sequence, suggesting the model lacked the representational capacity to distinguish constraint types.
+
+**HeteroGAT.** The next iteration introduced heterogeneous graph convolutions with separate attention mechanisms for each edge type, plus global context injection through HGT layers at intermediate depths. This allowed the model to learn different reasoning patterns for row/column constraints versus region constraints versus diagonal constraints. Performance improved substantially to 96% F1 and 91% full solve rate. However, errors still concentrated in early steps where global reasoning matters most.
+
+**HRM.** The final architecture separates local and global reasoning into distinct modules that iterate in cycles. The L-module runs multiple micro-steps of graph attention to converge on local constraint detection. The H-module then aggregates global context through multi-head attention pooling. This cycle repeats, allowing the model to progressively refine its understanding from local constraints to global consistency to solution confidence. This structure directly addresses the core problem: early placements require mostly global reasoning (many cells satisfy local constraints), while later placements are dominated by local constraint elimination (few valid options remain).
+
+**Benchmark Comparison.** To validate that the architectural choices matter, two benchmark models were trained on the same data. A Benchmark HRM uses the same hierarchical iteration pattern but replaces graph convolutions with standard transformer layers over a flattened board representation. A Benchmark Sequential uses a simple stacked transformer without hierarchical structure. Both benchmarks achieved around 82% full solve rate despite the Benchmark Sequential having over three times the parameters of the HRM. The Benchmark HRM's performance demonstrates that hierarchical reasoning helps, but the HRM's superior results show that graph structure provides additional benefits that transformers alone cannot match.
 
 ## Architecture
 
-### Hierarchical Reasoning Model (HRM)
+The HRM combines local constraint reasoning with global context in a structured hierarchy.
 
-The final architecture combines local and global reasoning in a structured hierarchy:
+**L-Module (Local Constraint Reasoner).** A recurrent block with weight-tied layers processes the heterogeneous graph. Each micro-step applies two HeteroConv layers (one GAT per edge type) followed by an HGT layer for cross-constraint integration. The module runs 2 micro-steps per cycle to allow local constraint information to propagate and converge. The heterogeneous structure means the model can learn that row/column constraints should be processed differently than region constraints or diagonal constraints.
 
-**L-Module (Local Constraint Reasoner)**
-- Recurrent block with weight-tied layers: GAT → GAT → HGT
-- Runs 2 micro-steps per reasoning cycle for convergence on immediate constraints
-- Processes: line_constraint (row/col), region_constraint (color), diagonal_constraint (adjacency)
-- Fixed architecture enables efficient iterative refinement
+**H-Module (Global Context Manager).** After L-module convergence, multi-head attention pooling aggregates all node embeddings into a global context vector. This captures board-wide patterns that individual nodes cannot see through local message passing alone. The H-module runs once per cycle, operating at a slower timescale than the local reasoning.
 
-**H-Module (Global Context Manager)**
-- Multi-head attention pooling over all node embeddings
-- Produces global context vector z_H after L-module convergence
-- Runs once per cycle (3 total cycles)
+**Cycle Integration.** The global context conditions the next cycle's L-module processing. Three cycles allow for progressive refinement: initial passes detect immediate constraint violations, middle passes integrate global state to identify problematic positions, and final passes converge on solution confidence.
 
-**Integration via FiLM Conditioning**
-- Global context z_H modulates L-module activations across cycles
-- Enables hierarchical convergence: local constraint detection → global consistency → solution refinement
+**Readout.** The final node embeddings concatenated with global context pass through an MLP to produce per-cell logits. During inference, the model predicts the next queen position as the argmax, places that queen, updates the board state, and repeats until all queens are placed.
 
-**Readout Layer**
-- Concatenates per-node features with global context
-- MLP projects to per-cell logits
-- Autoregressive inference: predicts next queen position, adds queen, repeats until n queens placed
-
-### Graph Representation
-
-Nodes: one per board cell
-- Normalized row/column coordinates
-- One-hot region ID (padded to max regions)
-- Binary has-queen flag
-
-Heterogeneous Edges: enables differentiated attention learning
-- line_constraint: cells in same row or column
-- region_constraint: cells in same color region
-- diagonal_constraint: cells at immediate diagonal adjacency
-
-This explicit constraint encoding allows the model to learn specialized attention patterns for each constraint type rather than inferring constraints from raw spatial features.
+**Graph Representation.** Each cell becomes a node with features encoding normalized row/column coordinates, one-hot region ID, and a binary flag indicating whether a queen is already placed. Edges encode the three constraint types explicitly, enabling the model to learn specialized attention patterns rather than inferring constraints from spatial position alone.
 
 ## Performance
 
-### Single State Validation Metrics - Single State means evaluated on ability to make a single correct placement based on being given a perfectly filled out board up to that point. IE can model place Queen 5 correctly given it has a board with queens 1-4 placed correctly as input. This Val set does include empty boards as well.
-- F1 Score: 99.36%
-- Top-1 Accuracy: 99.99999%
+The model is trained on single-state prediction and evaluated on both single-state accuracy and full autoregressive solving.
 
-###  Full Solve Val Results (720 Unseen Official Linkedin Puzzles) - Full Solve refers to the puzzles ability to auto-regressively solve an entire puzzle perfectly. IE if there are 8 queens to be placed, can we auto-regressively run the model 8 times to solve the puzzle with no errors. This set includes 180 official linkedin puzzles that are also augmented via rotation so every puzzle becomes 4 rotations.
-- Perfect-Solve Rate (First-Try): 98.8%
-- Inference Time: ~0.5s per puzzle (CPU)
-- Failure Mode: Errors concentrated in early steps (0-2), indicating ambiguity in initial placements
-- Behavior: Model either solves completely or fails irrecoverably; no partial/recoverable errors
+**Training Objective (Single-State Prediction).** Given a board with some queens already correctly placed, predict which remaining cells are valid for the next queen. This is a multi-label classification problem where the model sees partial solutions and learns to identify legal next moves. The training set includes boards at all stages of completion, from empty boards to boards with only one queen remaining to place.
 
-###  Full Solve Test Results (70 More Unseen Official Linkedin Puzzles)
-- Perfect-Solve Rate (First-Try): 100%
+**Single-State Validation Metrics.** On held-out partial board states, the best model achieves 99.54% F1 and 99.98% Top-1 accuracy. Top-1 measures whether the model's highest-confidence prediction is a valid move, which is what matters for autoregressive solving.
 
-### Key Characteristics
-- No backtracking required; all placements are direct predictions
-- Model failure indicates insufficient reasoning depth for that puzzle instance
-- Early-step failures suggest inherent ambiguity in initial board configuration
+**Full Autoregressive Solving (Validation).** The validation set contains 180 official LinkedIn puzzles augmented with 4-way rotations for 720 total puzzles. Full solving means starting from an empty board and running the model repeatedly to place all queens without any errors. The model solves 715 of 720 puzzles (99.3%) on the first attempt. When the model fails, it fails early (steps 0-2) where global ambiguity is highest, and failures are not recoverable since one wrong placement cascades into an unsolvable position.
 
-## Training Setup
+**Full Autoregressive Solving (Test).** The test set contains 97 official LinkedIn puzzles collected separately from the validation set. LinkedIn releases one puzzle per day, so the test set grows over time. The model solves all 97 test puzzles (100%) on the first attempt.
 
-Loss: Binary focal loss (α=0.25, γ=2.0) for handling class imbalance
-Optimizer: AdamW (lr=1e-3, wd=1e-5)
-Scheduler: ReduceLROnPlateau (patience=5, factor=0.5)
-Batch Size: 512
-Epochs: 18
+**Inference Speed.** About 0.5 seconds per puzzle on CPU.
 
-Dataset Transition: Switch to state-0 (empty board) dataset at epoch 5 to improve early-step accuracy and reduce Type-2 errors.
+## Ablation Study
+
+An ablation study compared the architectural progression under controlled conditions. All models were trained on the same data with comparable hyperparameter budgets. These results informed the decision to focus development effort on the HRM architecture rather than representing final tuned performance.
+
+| Model | Parameters | Single-State F1 | Full Solve Rate |
+|-------|------------|-----------------|-----------------|
+| GAT | 86K | 76.6% | 45.3% |
+| HeteroGAT | 445K | 96.0% | 91.0% |
+| HRM | 359K | 99.5% | 97.9% |
+| Benchmark HRM | 446K | 92.9% | 81.5% |
+| Benchmark Sequential | 1.2M | 91.4% | 82.2% |
+
+The progression from GAT to HeteroGAT shows the value of constraint-specific attention. The jump from HeteroGAT to HRM shows the value of hierarchical local-global iteration. The benchmark comparison shows that the HRM's graph structure contributes meaningfully beyond what hierarchical reasoning alone provides. The Benchmark Sequential's lower performance despite having over three times the parameters suggests that parameter count is not the limiting factor.
 
 ## Data & Labeling
 
-### Dataset Generation
-1. Create 10k base puzzles through region boundary mutation (ensures single-solution constraint)
-2. Augment with 4-way rotations (40k total)
-3. Generate progressive game states by iteratively removing queens (350k training examples)
+The training dataset starts with 10k base puzzles generated through region boundary mutation, a process that guarantees each puzzle has exactly one valid solution. These are augmented with 4-way rotations to produce 40k puzzles, then expanded into progressive game states by iteratively removing queens from solved boards. This yields about 350k training examples representing boards at various stages of completion.
 
-### Move Type Classification
-- Type 1: Immediately illegal (violates row/col/region/diagonal). Label: 0
-- Type 2: Locally legal but globally invalid (leads to dead end). Label: 0
-- Type 3: Part of valid solution path. Label: 1
-
-The core challenge is distinguishing Type 2 from Type 3 using learned global reasoning. The hierarchical mechanism explicitly addresses this through multi-cycle refinement: initial L-module passes detect immediate constraints, while H-module integrates global state to identify unsolvable downstream positions.
+Each cell in a training example is labeled as valid (1) or invalid (0) for the next queen placement. Invalid cells fall into two categories: those that immediately violate a constraint (same row, column, region, or diagonal as an existing queen) and those that are locally legal but globally invalid because they lead to unsolvable positions. The model must learn to distinguish these cases, which is the core difficulty of the problem. Type-1 violations are easy to detect through local reasoning, but Type-2 violations require understanding the global board state to recognize that a placement eliminates all valid options for some future queen.
 
 ## Installation
 
@@ -184,70 +160,22 @@ queens-solver/
 
 ## Training Details
 
-### State-0 Dataset Strategy
-Mid-training transition to state-0 dataset (empty boards only) addresses the Type-2 vs Type-3 distinction more directly. Empty boards present the maximum ambiguity, forcing the model to develop robust global reasoning patterns that generalize to partial-board states.
+Training uses AdamW optimizer (lr=1e-3, weight decay=1e-5) with ReduceLROnPlateau scheduling (patience=5, factor=0.5) for 18 epochs at batch size 512. The loss function is binary focal loss (α=0.25, γ=2.0) to handle severe class imbalance where most cells are invalid placements. Focal loss downweights easy negatives and emphasizes hard positives, which is critical when the model needs to learn subtle distinctions between locally-legal-but-globally-invalid moves.
 
-### Loss Function & Class Imbalance
-Binary focal loss with α=0.25 (weighting), γ=2.0 (focusing) aggressively downweights easy negatives and emphasizes hard positives, critical for navigating the sparse positive class in this problem.
+Mid-training at epoch 5, the dataset transitions to include more state-0 (empty board) examples. Empty boards present maximum ambiguity since many cells satisfy local constraints, forcing the model to develop robust global reasoning patterns. This strategy directly targets the hardest cases where errors are most likely.
 
-### Heterogeneous Graph Modeling
-Each edge type receives independent attention mechanisms, allowing the model to learn constraint-specific reasoning strategies rather than conflating different constraints into a single attention pattern.
+## Visualization
 
-## Visualization & Analysis
-
-### Current Focus: Layer-Activation Reasoning Visualization
-
-Objective: Demonstrate how the model reasons across hierarchical depth rather than only which cell it predicts.
-
-Approach: Custom layer-activation visualization methods that display:
-- Early reasoning (L-module, micro-step 1): Immediate constraint detection
-- Mid reasoning (L-module, micro-step 2 + H-module update): Global context integration
-- Late reasoning (final cycle): Solution refinement and convergence
-
-Prior attempts (integrated gradients, attention maps) highlighted only correct predictions or captured too narrow attention focus. Target outcome: visualization revealing evolving rule awareness and constraint interaction patterns, demonstrating hierarchical convergence for portfolio presentation.
-
-### Analysis Tools
-- Board size effects: Performance scaling across 7×7 to 11×11 puzzles
-- Game state analysis: Accuracy vs. queens remaining
-- Spatial patterns: Error heatmaps by position (center/edge/corner)
-- Early-step error distribution: Identify systematic early-placement ambiguities
+The model saves intermediate activations during forward passes to enable visualization of its reasoning process. By computing norms of the activations at each layer and cycle, we can see how the model responds to existing queens and applies game constraints. This is not a perfect reflection of internal representations but provides an intuitive picture of how constraint awareness develops across the hierarchical processing stages. Early cycles show the model detecting local constraint violations, while later cycles show convergence toward the predicted placement.
 
 ## Configuration
 
-Key parameters in `config.py`:
-- Model: 2 GAT layers, 2 HGT layers, 128 hidden dimension
-- Cycles: 3 (H-module updates per prediction)
-- Micro-steps: 2 per cycle (L-module iterations)
-- Input injection: Enabled at each cycle
-- Dropout: 0.10
-- Batch size: 512
+The default configuration in `config.py` uses 128 hidden dimensions, 3 hierarchical cycles with 2 micro-steps each, and 0.10 dropout. All hyperparameters are centralized there for easy modification during experimentation.
 
 ## Experiment Tracking
 
-Weights & Biases integration for reproducibility:
-- Training/validation metrics (loss, F1, top-1 accuracy)
-- Gradient analysis for vanishing gradient detection
-- Prediction samples and confidence distributions
-- System resource monitoring
+Weights & Biases integration logs training and validation metrics (loss, F1, top-1 accuracy), gradient statistics for debugging vanishing gradients, prediction samples with confidence distributions, and system resource usage.
 
 ## Learning Objectives
 
-- Graph Neural Network design for constraint satisfaction problems
-- Hierarchical reasoning architecture for multi-scale problem solving
-- Heterogeneous graph modeling for differentiated constraint reasoning
-- Autoregressive decoding without backtracking
-- Systematic evaluation, visualization, and analysis of learned reasoning
-- Experiment tracking and reproducibility at scale
-
-### Why Hierarchical Reasoning?
-
-Single-stage models struggle with Type-2 errors because they must balance two conflicting objectives simultaneously:
-1. Detect immediate constraint violations (local reasoning)
-2. Identify globally unsolvable positions (global reasoning)
-
-The HRM separates these concerns:
-- Fast local iterations converge on immediate constraints
-- Slow global update builds context from accumulated local state
-- Cycling enables progressive refinement without exponential cost
-
-This structure maps to the problem's inherent difficulty hierarchy: early steps require global reasoning (most ambiguous), while later steps are dominated by local constraint elimination (highly determined).
+This project explores Graph Neural Network design for constraint satisfaction problems, hierarchical reasoning architectures that separate local and global processing, heterogeneous graph modeling for constraint-specific attention, and autoregressive decoding without backtracking. The experimental progression demonstrates systematic ablation methodology and the importance of architectural choices over raw parameter count.
