@@ -5,3 +5,7 @@ test_set_with_states.json
 FinalTestOfficialPuzzles.json
 'IMG_5226.jpg' # solved with no backtracking
 'IMG_5319.jpg' # GOT IT
+
+Failure Analysis Puzzles 
+'IMG_4850.jpg_rot0' -> GAT Fail 
+'IMG_4947.jpg_rot0' -> HeteroGAT Fail

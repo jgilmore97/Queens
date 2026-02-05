@@ -32,6 +32,7 @@ class GAT(nn.Module):
 
         head_dim = hidden_dim // heads
         assert hidden_dim % heads == 0, "hidden_dim must be divisible by heads"
+        self.heads = heads
 
         self.conv1 = pyg_nn.GATConv(
             in_channels=input_dim,
@@ -58,15 +59,30 @@ class GAT(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.linear  = nn.Linear(hidden_dim, 1)
 
-    def forward(self, x, edge_index):
-        x = self.relu(self.conv1(x, edge_index))
+    def forward(self, x, edge_index, return_attention=False):
+        attention_weights = [] if return_attention else None
+
+        if return_attention:
+            x, (edge_idx, alpha) = self.conv1(x, edge_index, return_attention_weights=True)
+            attention_weights.append({'edge_index': edge_idx.detach().cpu(), 'alpha': alpha.detach().cpu()})
+            x = self.relu(x)
+        else:
+            x = self.relu(self.conv1(x, edge_index))
         x = self.dropout(x)
 
         for conv in self.convs:
-            x = self.relu(x + conv(x, edge_index))
+            if return_attention:
+                x_new, (edge_idx, alpha) = conv(x, edge_index, return_attention_weights=True)
+                attention_weights.append({'edge_index': edge_idx.detach().cpu(), 'alpha': alpha.detach().cpu()})
+                x = self.relu(x + x_new)
+            else:
+                x = self.relu(x + conv(x, edge_index))
             x = self.dropout(x)
 
         logits = self.linear(x).squeeze(-1)
+
+        if return_attention:
+            return logits, attention_weights
         return logits
 
 class HeteroGAT(nn.Module):
@@ -161,11 +177,16 @@ class HeteroGAT(nn.Module):
         for layer_idx in self.input_injection_layers:
             self.input_projections[str(layer_idx)] = nn.Linear(input_dim, hidden_dim)
 
-    def forward(self, batch):
-        """Forward pass with multi-stage global context injection for Type 2 error prevention.
+    def forward(self, batch, return_attention=False):
+        """Forward pass with multi-stage global context injection.
 
         Args:
             batch: HeteroData batch object from PyTorch Geometric or _MutableBatch wrapper
+            return_attention: If True, also return attention weights from all GAT layers
+
+        Returns:
+            logits: Model predictions
+            attention_dict (optional): Dict mapping layer_idx -> edge_type -> {'edge_index', 'alpha'}
         """
         if hasattr(batch, 'x_dict') and hasattr(batch, 'edge_index_dict'):
             x_dict = batch.x_dict
@@ -179,8 +200,24 @@ class HeteroGAT(nn.Module):
             }
 
         original_input = x_dict['cell']
+        attention_dict = {} if return_attention else None
 
-        x_dict = self.conv1(x_dict, edge_index_dict)
+        if return_attention:
+            layer_attention = {}
+            x_out = torch.zeros(x_dict['cell'].shape[0], self.hidden_dim, device=x_dict['cell'].device)
+            for edge_type in self.edge_types:
+                gat_conv = self.conv1.convs[edge_type]
+                edge_index = edge_index_dict[edge_type]
+                out, (edge_idx, alpha) = gat_conv(x_dict['cell'], edge_index, return_attention_weights=True)
+                x_out = x_out + out
+                layer_attention[edge_type] = {
+                    'edge_index': edge_idx.detach().cpu(),
+                    'alpha': alpha.detach().cpu()
+                }
+            attention_dict[0] = layer_attention
+            x_dict = {'cell': x_out}
+        else:
+            x_dict = self.conv1(x_dict, edge_index_dict)
 
         if self.use_batch_norm:
             x_dict = {key: self.bn1(x) for key, x in x_dict.items()}
@@ -191,12 +228,26 @@ class HeteroGAT(nn.Module):
         for i, conv in enumerate(self.convs):
             layer_idx = i + 1
 
-            x_dict_new = conv(x_dict, edge_index_dict)
+            if return_attention:
+                layer_attention = {}
+                x_out = torch.zeros_like(x_dict['cell'])
+                for edge_type in self.edge_types:
+                    gat_conv = conv.convs[edge_type]
+                    edge_index = edge_index_dict[edge_type]
+                    out, (edge_idx, alpha) = gat_conv(x_dict['cell'], edge_index, return_attention_weights=True)
+                    x_out = x_out + out
+                    layer_attention[edge_type] = {
+                        'edge_index': edge_idx.detach().cpu(),
+                        'alpha': alpha.detach().cpu()
+                    }
+                attention_dict[layer_idx] = layer_attention
+                x_dict_new = {'cell': x_out}
+            else:
+                x_dict_new = conv(x_dict, edge_index_dict)
 
             if self.use_batch_norm:
                 x_dict_new = {key: self.batch_norms[i](x) for key, x in x_dict_new.items()}
 
-            # Re-inject projected original features to preserve signal
             if layer_idx in self.input_injection_layers:
                 projected_input = self.input_projections[str(layer_idx)](original_input)
                 x_dict_new['cell'] = x_dict_new['cell'] + projected_input
@@ -207,7 +258,6 @@ class HeteroGAT(nn.Module):
             }
             x_dict = {key: self.dropout(x) for key, x in x_dict.items()}
 
-            # Mid-sequence global context injection
             if layer_idx == self.mid_global_layer:
                 x_dict_global = self.mid_graphformer(x_dict, edge_index_dict)
                 if self.use_batch_norm:
@@ -231,36 +281,9 @@ class HeteroGAT(nn.Module):
         cell_features = x_dict['cell']
         logits = self.linear(cell_features).squeeze(-1)
 
+        if return_attention:
+            return logits, attention_dict
         return logits
-
-    def get_attention_weights(self, batch, layer_idx=0):
-        """Get attention weights for a specific layer.
-
-        Args:
-            batch: HeteroData batch object from PyTorch Geometric or _MutableBatch wrapper
-            layer_idx: Layer index to extract attention from
-        """
-        if hasattr(batch, 'x_dict') and hasattr(batch, 'edge_index_dict'):
-            x_dict = batch.x_dict
-            edge_index_dict = batch.edge_index_dict
-        else:
-            x_dict = {'cell': batch['cell'].x}
-            edge_index_dict = {
-                ('cell', 'line_constraint', 'cell'): batch[('cell', 'line_constraint', 'cell')].edge_index,
-                ('cell', 'region_constraint', 'cell'): batch[('cell', 'region_constraint', 'cell')].edge_index,
-                ('cell', 'diagonal_constraint', 'cell'): batch[('cell', 'diagonal_constraint', 'cell')].edge_index,
-            }
-
-        if layer_idx == 0:
-            conv_layer = self.conv1
-        elif layer_idx <= len(self.convs):
-            conv_layer = self.convs[layer_idx - 1]
-        else:
-            raise ValueError(f"Layer {layer_idx} doesn't exist")
-
-        attention_weights = {}
-        # TODO: Implement attention weight extraction
-        return attention_weights
 
 
 class _RMSNorm(nn.Module):
@@ -423,10 +446,10 @@ class _HModule(nn.Module):
         self.norm2 = _RMSNorm(hidden_dim)
         self.drop = nn.Dropout(dropout)
 
-    def forward(self, z_H, z_L, batch_size):
+    def forward(self, z_H, z_L, batch_size, return_attention=False):
         B = batch_size
         N = z_H.shape[0]
-        C = N // B 
+        C = N // B
         d = self.hidden_dim
         H = self.num_heads
         Dh = self.head_dim
@@ -441,6 +464,7 @@ class _HModule(nn.Module):
 
         scores = torch.matmul(q, k.transpose(-2, -1)) / (Dh ** 0.5)  # [B, H, C, C]
         attn = torch.softmax(scores, dim=-1)
+        attn_for_output = attn.detach().cpu() if return_attention else None
         attn = self.drop(attn)
 
         out = torch.matmul(attn, v)  # [B, H, C, Dh]
@@ -451,8 +475,11 @@ class _HModule(nn.Module):
 
         h = self.norm2(h + self.drop(self.ffn(h)))
 
+        if return_attention:
+            return h.view(N, d), attn_for_output
         return h.view(N, d)
-    
+
+
 class HRM(nn.Module):
     def __init__(
         self,
@@ -502,13 +529,13 @@ class HRM(nn.Module):
             nn.Linear(hidden_dim, 1),
         )
 
-    def forward(self, batch, return_intermediates=False):
+    def forward(self, batch, return_intermediates=False, return_attention=False):
         x_dict = batch.x_dict
         edge_index_dict = batch.edge_index_dict
-        
+
         B = batch.num_graphs
         N = x_dict['cell'].shape[0]
-        batch_idx = batch['cell'].batch 
+        batch_idx = batch['cell'].batch
 
         x_embedded = self.embed(x_dict['cell'])  # [N, d]
 
@@ -517,6 +544,9 @@ class HRM(nn.Module):
 
         if return_intermediates:
             H_states, L_states = [], []
+
+        if return_attention:
+            H_attentions = []
 
         for cycle_idx in range(self.n_cycles):
             for micro_idx in range(self.t_micro):
@@ -529,23 +559,46 @@ class HRM(nn.Module):
                 if return_intermediates:
                     L_states.append(z_L.detach().cpu())
 
-            z_H = self.h_block(
-                z_H=z_H,
-                z_L=z_L,
-                batch_size=B,
-            )
+            if return_attention:
+                z_H, attn = self.h_block(
+                    z_H=z_H,
+                    z_L=z_L,
+                    batch_size=B,
+                    return_attention=True,
+                )
+                H_attentions.append(attn)
+            else:
+                z_H = self.h_block(
+                    z_H=z_H,
+                    z_L=z_L,
+                    batch_size=B,
+                )
             if return_intermediates:
                 H_states.append(z_H.detach().cpu())
 
         logits = self.readout(z_H).squeeze(-1)
 
-        if return_intermediates:
-            nodes_per_graph = (batch_idx == 0).sum().item()
-            board_size = int(nodes_per_graph ** 0.5)
+        nodes_per_graph = (batch_idx == 0).sum().item()
+        board_size = int(nodes_per_graph ** 0.5)
+
+        if return_intermediates and return_attention:
+            return logits, {
+                'H_states': H_states,
+                'L_states': L_states,
+                'H_attentions': H_attentions,
+                'final_logits': logits.detach().cpu(),
+                'board_size': board_size,
+            }
+        elif return_intermediates:
             return logits, {
                 'H_states': H_states,
                 'L_states': L_states,
                 'final_logits': logits.detach().cpu(),
+                'board_size': board_size,
+            }
+        elif return_attention:
+            return logits, {
+                'H_attentions': H_attentions,
                 'board_size': board_size,
             }
 
