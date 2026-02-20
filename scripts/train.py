@@ -1,27 +1,12 @@
 import os
-import random
 
-import numpy as np
-import torch
-from pathlib import Path
-
-from queens_solver.models.benchmark import get_benchmark_model
-from queens_solver.training.benchmark_trainer import benchmark_training
 from queens_solver.config import Config, BASELINE_CONFIG, BenchmarkConfig
-from queens_solver.data.dataset import get_queens_loaders, get_benchmark_loaders, get_combined_queens_loaders, SizeBucketBatchSampler
+from queens_solver.data.dataset import get_queens_loaders, get_benchmark_loaders, get_combined_queens_loaders
+from queens_solver.models.benchmark import get_benchmark_model
 from queens_solver.models.models import GAT, HeteroGAT, HRM
+from queens_solver.training.benchmark_trainer import benchmark_training
 from queens_solver.training.trainer import run_training_with_tracking_hetero, run_training_with_tracking
-
-def set_seed(seed=42):
-    """Set random seeds for reproducibility."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+from queens_solver.utils import set_seed
 
 def main_heterogeneous_training():
     """Train heterogeneous GAT model with experiment tracking."""
@@ -44,7 +29,8 @@ def main_heterogeneous_training():
         num_workers=hetero_config.data.num_workers,
         pin_memory=hetero_config.data.pin_memory,
         shuffle_train=hetero_config.data.shuffle_train,
-        sampler = hetero_config.training.batch_sampler
+        same_size_batches=False,
+        drop_last=False
     )
 
     print(f"Train samples: {len(train_loader.dataset):,}")
@@ -135,20 +121,6 @@ def main_hrm_training():
     print(f"Val samples: {len(val_loader.dataset):,}")
 
     print(f"\nCreating HRM model...")
-    # model = HRM(
-    #     input_dim=hrm_config.model.input_dim,
-    #     hidden_dim=hrm_config.model.hidden_dim,
-    #     gat_heads=hrm_config.model.gat_heads,
-    #     hgt_heads=hrm_config.model.hgt_heads,
-    #     dropout=hrm_config.model.dropout,
-    #     use_batch_norm=hrm_config.model.use_batch_norm,
-    #     n_cycles=hrm_config.model.n_cycles,
-    #     t_micro=hrm_config.model.t_micro,
-    #     use_input_injection=hrm_config.model.use_input_injection,
-    #     z_dim=hrm_config.model.z_dim,
-    #     use_hmod=hrm_config.model.use_hmod,
-    #     same_size_batches=hrm_config.training.same_size_batches
-    # )
 
     model = HRM(
         input_dim=hrm_config.model.input_dim,

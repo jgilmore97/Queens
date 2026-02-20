@@ -38,6 +38,7 @@ class FailureAnalyzer(Solver):
         self.stats = {
             'total': 0,
             'correct': 0,
+            'all_sizes': [],
             'failed_sizes': [],
             'first_mistake_steps': [],
             'first_mistake_logits': []
@@ -48,6 +49,7 @@ class FailureAnalyzer(Solver):
         self.stats = {
             'total': 0,
             'correct': 0,
+            'all_sizes': [],
             'failed_sizes': [],
             'first_mistake_steps': [],
             'first_mistake_logits': []
@@ -297,13 +299,17 @@ class FailureAnalyzer(Solver):
         for (r, c), logit in zip(queens_placed, logits_placed):
             print(f"  ({r},{c}) logit={logit:.3f}")
 
-    def analyze_puzzle(self, puzzle: dict, ground_truth: Optional[np.ndarray] = None) -> dict:
+    def analyze_puzzle(self, puzzle: dict, ground_truth: Optional[np.ndarray] = None,
+                       batch_placement: bool = True,
+                       confidence_threshold: float = 4.0) -> dict:
         """
         Analyze a single puzzle and update internal statistics.
 
         Args:
             puzzle: Dict with 'region' key containing the region board.
             ground_truth: Optional pre-computed ground truth. If None, computed via backtracking.
+            batch_placement: If True, place multiple queens per pass when confident.
+            confidence_threshold: Logit threshold for batch placement.
 
         Returns:
             Dict with analysis results including correctness and failure details.
@@ -316,12 +322,14 @@ class FailureAnalyzer(Solver):
         correct_positions = set(zip(*np.where(ground_truth == 1)))
 
         self.stats['total'] += 1
+        self.stats['all_sizes'].append(n)
 
         result = self.solve_puzzle_diagnostic(
             puzzle,
             ground_truth=ground_truth,
             verbose=False,
-            batch_placement=False
+            batch_placement=batch_placement,
+            confidence_threshold=confidence_threshold
         )
 
         analysis = {
@@ -337,26 +345,32 @@ class FailureAnalyzer(Solver):
             self.stats['failed_sizes'].append(n)
 
             placed_queens = []
-            for step_idx, pass_info in enumerate(result['passes']):
-                placement = pass_info['queens_placed'][0] if pass_info['queens_placed'] else None
-                if placement is None:
-                    continue
+            queen_count = 0
+            found_mistake = False
+            for pass_info in result['passes']:
+                placements = pass_info.get('queens_placed', [])
+                logits_placed = pass_info.get('logits_placed', [])
 
-                remaining_correct = correct_positions - set(placed_queens)
-                is_correct = placement in remaining_correct
+                for i, placement in enumerate(placements):
+                    queen_count += 1
+                    remaining_correct = correct_positions - set(placed_queens)
+                    is_correct = placement in remaining_correct
 
-                if not is_correct:
-                    mistake_step = step_idx + 1
-                    mistake_logit = pass_info['logits_placed'][0] if pass_info['logits_placed'] else 0.0
+                    if not is_correct:
+                        mistake_logit = logits_placed[i] if i < len(logits_placed) else 0.0
 
-                    self.stats['first_mistake_steps'].append(mistake_step)
-                    self.stats['first_mistake_logits'].append(mistake_logit)
+                        self.stats['first_mistake_steps'].append(queen_count)
+                        self.stats['first_mistake_logits'].append(mistake_logit)
 
-                    analysis['first_mistake_step'] = mistake_step
-                    analysis['first_mistake_logit'] = mistake_logit
+                        analysis['first_mistake_step'] = queen_count
+                        analysis['first_mistake_logit'] = mistake_logit
+                        found_mistake = True
+                        break
+
+                    placed_queens.append(placement)
+
+                if found_mistake:
                     break
-
-                placed_queens.append(placement)
 
         return analysis
 
@@ -424,14 +438,22 @@ def evaluate_models_on_dataset(
     if not analyzers:
         raise ValueError(f"No models found in {models_dir}")
 
+    print(f"Evaluating {len(analyzers)} models on {len(puzzles)} puzzles...")
+
     for puzzle_idx, puzzle in enumerate(puzzles):
         ground_truth = Solver.solve_with_vanilla_backtracking(puzzle)
 
-        for analyzer in analyzers.values():
+        for name, analyzer in analyzers.items():
+            analyzer.model.to(device)
             analyzer.analyze_puzzle(puzzle, ground_truth=ground_truth)
+            analyzer.model.to('cpu')
 
-        if (puzzle_idx + 1) % 100 == 0:
-            logger.info(f"Evaluated {puzzle_idx + 1}/{len(puzzles)} puzzles")
+        if (puzzle_idx + 1) % 25 == 0:
+            accs = {n: f"{a.get_accuracy():.1f}%" for n, a in analyzers.items()}
+            print(f"  [{puzzle_idx + 1}/{len(puzzles)}] {accs}")
+
+    torch.cuda.empty_cache() if device == 'cuda' else None
+    print("Evaluation complete.")
 
     stats = {name: analyzer.get_stats() for name, analyzer in analyzers.items()}
     visualize_failure_statistics(stats, output_dir)
@@ -460,7 +482,7 @@ def visualize_failure_statistics(
     ax = axes[0]
     all_sizes = []
     for name in model_names:
-        all_sizes.extend(stats[name]['failed_sizes'])
+        all_sizes.extend(stats[name].get('all_sizes', stats[name]['failed_sizes']))
     if all_sizes:
         min_size = min(all_sizes)
         max_size = max(all_sizes)
@@ -472,14 +494,20 @@ def visualize_failure_statistics(
     width = 0.8 / num_models
 
     for idx, name in enumerate(model_names):
-        sizes = stats[name]['failed_sizes']
-        counts = [sizes.count(s) for s in size_values]
+        failed = stats[name]['failed_sizes']
+        evaluated = stats[name].get('all_sizes', [])
+        total_per_size = {s: evaluated.count(s) for s in size_values}
+        failed_per_size = {s: failed.count(s) for s in size_values}
+        rates = [
+            failed_per_size[s] / total_per_size[s] * 100 if total_per_size[s] > 0 else 0
+            for s in size_values
+        ]
         offset = (idx - num_models / 2 + 0.5) * width
-        ax.bar(x + offset, counts, width, label=name, color=colors[idx], edgecolor='black', linewidth=0.5)
+        ax.bar(x + offset, rates, width, label=name, color=colors[idx], edgecolor='black', linewidth=0.5)
 
     ax.set_xlabel('Puzzle Size (n)', fontsize=12)
-    ax.set_ylabel('Number of Failures', fontsize=12)
-    ax.set_title('Failed Puzzles by Size', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Failure Rate (%)', fontsize=12)
+    ax.set_title('Failure Rate by Puzzle Size', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(size_values)
     ax.legend(loc='upper right')
@@ -543,6 +571,40 @@ def visualize_failure_statistics(
         plt.savefig(filename, dpi=150, bbox_inches='tight')
         logger.info(f"Saved: {filename}")
         plt.close()
+
+        size_dist_path = output_path / "puzzle_size_distribution.txt"
+        with open(size_dist_path, 'w') as f:
+            f.write("Puzzle Size Distribution\n")
+            f.write("=" * 60 + "\n\n")
+            ref_name = model_names[0]
+            ref_sizes = stats[ref_name].get('all_sizes', [])
+            f.write(f"{'Size':>6} {'Count':>8} {'% of Total':>12}\n")
+            f.write("-" * 30 + "\n")
+            total = len(ref_sizes)
+            for s in size_values:
+                count = ref_sizes.count(s)
+                pct = count / total * 100 if total > 0 else 0
+                f.write(f"{s:>6} {count:>8} {pct:>11.1f}%\n")
+            f.write(f"{'Total':>6} {total:>8}\n")
+
+            f.write("\n\nPer-Model Failure Rates by Size\n")
+            f.write("=" * 60 + "\n\n")
+            header = f"{'Size':>6}"
+            for name in model_names:
+                header += f" {name:>16}"
+            f.write(header + "\n")
+            f.write("-" * len(header) + "\n")
+            for s in size_values:
+                line = f"{s:>6}"
+                for name in model_names:
+                    evaluated = stats[name].get('all_sizes', [])
+                    failed = stats[name]['failed_sizes']
+                    t = evaluated.count(s)
+                    fc = failed.count(s)
+                    rate = fc / t * 100 if t > 0 else 0
+                    line += f" {fc}/{t} ({rate:.0f}%)".rjust(16)
+                f.write(line + "\n")
+        print(f"Saved: {size_dist_path}")
     else:
         plt.show()
 
@@ -573,7 +635,8 @@ def visualize_model_comparison(
     output_dir: Optional[str] = None,
     show_activation: bool = True,
     device: str = 'cuda',
-    hrm_cycle: int = 1
+    hrm_cycle: int = 1,
+    include_benchmarks: bool = True
 ) -> Dict[str, dict]:
     """
     Visualize step-by-step comparison of multiple models solving the same puzzle.
@@ -588,6 +651,7 @@ def visualize_model_comparison(
         show_activation: If True, show activation column (H-late for HRM, empty for others).
         device: Device to run models on.
         hrm_cycle: Which HRM attention cycle to visualize (1, 2, or 3).
+        include_benchmarks: If True, include benchmark models in the comparison.
 
     Returns:
         Dict mapping model names to their diagnostic results.
@@ -599,6 +663,8 @@ def visualize_model_comparison(
     model_order = []
 
     for key, config in MODEL_CONFIGS.items():
+        if not include_benchmarks and key.startswith('benchmark_'):
+            continue
         model_path = models_path / config['subdir'] / 'best_model.pt'
         if not model_path.exists():
             logger.warning(f"Model not found: {model_path}, skipping {config['display_name']}")

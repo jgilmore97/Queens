@@ -15,9 +15,7 @@ logger = logging.getLogger(__name__)
 from queens_solver.data.dataset import (
     QueensDataset,
     HomogeneousQueensDataset,
-    MixedDataset,
     create_filtered_old_dataset,
-    create_filtered_old_dataset_homogeneous,
     get_combined_queens_loaders,
 )
 from queens_solver.config import Config
@@ -574,86 +572,19 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
         best_epoch = 0
         best_top1_epoch = 0
 
-        mixed_train_loader, state0_val_loader = None, None
-        current_dataset = "multi-state"
-        switched = False
-
         logger.info(
             f"Training: {config.training.epochs} epochs, {sum(p.numel() for p in model.parameters()):,} params, "
             f"device={device}, format=homogeneous"
         )
 
-        switch_epoch = getattr(config.training, 'switch_epoch', None)
-        if switch_epoch and switch_epoch < config.training.epochs:
-            logger.info(f"Dataset switch at epoch {switch_epoch}")
-
         for epoch in range(1, config.training.epochs + 1):
-            if switch_epoch and epoch == switch_epoch and mixed_train_loader is None:
-                logger.info(f"Epoch {epoch}: Switching to mixed dataset")
-
-                # Create homogeneous datasets
-                state0_train_dataset = HomogeneousQueensDataset(
-                    config.training.state0_json_path,
-                    split="train",
-                    val_ratio=config.training.val_ratio,
-                    seed=config.data.seed
-                )
-                state0_val_dataset = HomogeneousQueensDataset(
-                    config.training.state0_json_path,
-                    split="val",
-                    val_ratio=config.training.val_ratio,
-                    seed=config.data.seed
-                )
-
-                filtered_old_train_dataset = create_filtered_old_dataset_homogeneous(
-                    config.data.train_json,
-                    val_ratio=config.training.val_ratio,
-                    seed=config.data.seed,
-                    split="train"
-                )
-
-                mixed_dataset = MixedDataset(
-                    state0_train_dataset,
-                    filtered_old_train_dataset,
-                    config.training.mixed_ratio
-                )
-
-                mixed_train_loader = DataLoader(
-                    mixed_dataset,
-                    batch_size=config.training.batch_size // 2,
-                    num_workers=config.data.num_workers,
-                    pin_memory=config.data.pin_memory,
-                    shuffle=True,
-                )
-
-                state0_val_loader = DataLoader(
-                    state0_val_dataset,
-                    batch_size=config.training.batch_size // 4,
-                    num_workers=config.data.num_workers,
-                    pin_memory=config.data.pin_memory,
-                    shuffle=False,
-                )
-
-                current_dataset = "mixed (75% state-0, 25% old)"
-                switched = True
-
-                logger.info(f"Mixed train samples: {len(mixed_dataset):,}")
-                logger.info(f"State-0 val samples: {len(state0_val_dataset):,}")
-
-            if switched and mixed_train_loader is not None:
-                active_train_loader = mixed_train_loader
-                current_dataset = "mixed (75% state-0, 25% old)"
-            else:
-                active_train_loader = train_loader
-                current_dataset = "multi-state"
-
             epoch_start_time = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
             epoch_end_time = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
 
             if epoch_start_time:
                 epoch_start_time.record()
 
-            train_metrics = train_epoch(model, active_train_loader, criterion, optimizer, device, epoch)
+            train_metrics = train_epoch(model, train_loader, criterion, optimizer, device, epoch)
 
             val_metrics = evaluate_epoch(model, val_loader, criterion, device, epoch)
             if state0_val_loader is not None:
@@ -812,8 +743,8 @@ def run_training_with_tracking_hetero(model, train_loader, val_loader, config, r
                 is_best = is_best_solve_rate
                 if is_best:
                     best_solve_rate = solve_rate
-            # else:
-            #     is_best = is_best_f1
+            else:
+                is_best = is_best_f1
 
             if scheduler is not None:
                 if isinstance(scheduler, ReduceLROnPlateau):

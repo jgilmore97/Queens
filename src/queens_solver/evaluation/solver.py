@@ -118,7 +118,7 @@ class Solver:
                 n_cycles=model_config.get('n_cycles', 3),
                 t_micro=model_config.get('t_micro', 2)
             )
-            logger.debug(f"Loaded HRM Full Spatial solver (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)})")
+            logger.debug(f"Loaded HRM Full Spatial solver (cycles={model_config.get('n_cycles', 3)}, t_micro={model_config.get('t_micro', 2)})")
             is_heterogeneous = True
             self.is_benchmark = False
 
@@ -133,7 +133,7 @@ class Solver:
                 n_cycles=model_config.get('n_cycles', 3),
                 t_micro=model_config.get('t_micro', 2),
             )
-            logger.debug(f"Loaded HRM solver (cycles={model_config.get('n_cycles', 2)}, t_micro={model_config.get('t_micro', 2)})")
+            logger.debug(f"Loaded HRM solver (cycles={model_config.get('n_cycles', 3)}, t_micro={model_config.get('t_micro', 2)})")
             is_heterogeneous = True
             self.is_benchmark = False
 

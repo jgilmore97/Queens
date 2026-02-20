@@ -1,17 +1,16 @@
-import random
-import time
 import json
+import time
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-import numpy as np
 import torch
 from torch_geometric.data import Batch
 
 from queens_solver.data.dataset import HomogeneousQueensDataset
-from queens_solver.training.trainer import train_model_for_ablation
-from queens_solver.evaluation.evaluator import evaluate_solve_rate as evaluate_solve_rate_hetero, _batched_argmax
 from queens_solver.evaluation.benchmark_eval import evaluate_solve_rate as evaluate_solve_rate_benchmark
+from queens_solver.evaluation.evaluator import evaluate_solve_rate as evaluate_solve_rate_hetero, _batched_argmax
+from queens_solver.training.trainer import train_model_for_ablation
+from queens_solver.utils import set_seed
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -49,16 +48,6 @@ SHARED_CONFIG = {
 }
 
 MODELS_TO_TRAIN = ['gat', 'hetero_gat', 'hrm_fullspatial', 'benchmark_hrm', 'benchmark_sequential']
-
-def set_seed(seed: int = 42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
 
 
 def setup_directories():

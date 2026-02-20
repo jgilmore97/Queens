@@ -1,35 +1,23 @@
-import random
-import numpy as np
+import traceback
+from pathlib import Path
+from typing import Dict
+
+import optuna
 import torch
 from torch import nn, optim
 from torch_geometric.loader import DataLoader
 from tqdm.auto import tqdm
-import optuna
-from typing import Dict
-from pathlib import Path
-import traceback
 
-from queens_solver.models.models import HRM
-from queens_solver.data.dataset import get_combined_queens_loaders
-from queens_solver.training.trainer import FocalLoss
-from queens_solver.evaluation.evaluator import evaluate_solve_rate
 from queens_solver.config import Config
-
-
-def set_seed(seed: int = 42) -> None:
-    """Set random seeds for reproducibility."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+from queens_solver.data.dataset import get_combined_queens_loaders
+from queens_solver.evaluation.evaluator import evaluate_solve_rate
+from queens_solver.models.models import HRM
+from queens_solver.training.trainer import FocalLoss
+from queens_solver.utils import set_seed
 
 
 def get_project_root() -> Path:
-    return Path(__file__).parent.parent.parent
+    return Path(__file__).parent.parent
 
 
 def create_model_from_trial(trial: optuna.Trial, config: Config) -> HRM:
