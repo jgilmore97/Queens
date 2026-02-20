@@ -538,7 +538,10 @@ def visualize_queens_board_with_queens(example: dict, title: str = "Queens Board
     """Visualize a training example with queens overlaid on the colored region board."""
     region_board = np.array(example['region'])  
     if not show_labels:
-        queen_board = np.array(example['partial_board'])  
+        if 'partial_board' in example:
+            queen_board = np.array(example['partial_board'])  
+        else:
+            queen_board = np.zeros_like(region_board)
     else:
         queen_board = np.array(example['label_board'])  
     n = region_board.shape[0]

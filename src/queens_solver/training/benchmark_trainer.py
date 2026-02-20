@@ -1,28 +1,15 @@
 import logging
-import random
 
-import numpy as np
 import torch
 from tqdm.auto import tqdm
 
 from queens_solver.config import Config
-
-logger = logging.getLogger(__name__)
 from queens_solver.data.dataset import get_benchmark_loaders
 from queens_solver.training.tracker import ExperimentTracker
 from queens_solver.training.trainer import FocalLoss, create_scheduler
+from queens_solver.utils import set_seed
 
-
-def set_seed(seed: int = 42) -> None:
-    """Set random seeds for reproducibility."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+logger = logging.getLogger(__name__)
 
 def calculate_top1_metrics(
     logits: torch.Tensor,

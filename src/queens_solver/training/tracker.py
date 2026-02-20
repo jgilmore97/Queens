@@ -104,7 +104,7 @@ class ExperimentTracker:
                     "system/gpu_name": torch.cuda.get_device_name(),
                     "system/gpu_memory_gb": round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2),
                 })
-            except:
+            except Exception:
                 pass
 
         wandb.log(system_metrics, step=0)
@@ -131,7 +131,7 @@ class ExperimentTracker:
             try:
                 gpu_memory_mb = torch.cuda.memory_allocated() / (1024 * 1024)
                 all_metrics["system/gpu_memory_mb"] = gpu_memory_mb
-            except:
+            except Exception:
                 pass
 
         if (model is not None and
@@ -324,7 +324,6 @@ class ExperimentTracker:
                 "t_micro": getattr(self.config.model, 't_micro', None),
                 "use_input_injection": getattr(self.config.model, 'use_input_injection', None),
                 "z_dim": getattr(self.config.model, 'z_dim', None),
-                "use_hmod": getattr(self.config.model, 'use_hmod', None),
                 "use_batch_norm": getattr(self.config.model, 'use_batch_norm', None),
                 "same_size_batches": getattr(self.config.training, 'same_size_batches', None),
                 "hmod_heads": getattr(self.config.model, 'hmod_heads', None),

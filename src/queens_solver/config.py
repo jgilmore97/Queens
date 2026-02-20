@@ -22,7 +22,7 @@ def _detect_notebook_environment():
                 return 'google.colab' in str(get_ipython())
         except ImportError:
             pass
-    except:
+    except Exception:
         pass
     return False
 
@@ -47,19 +47,20 @@ class ModelConfig:
     hmod_heads: int = 4
     use_input_injection: bool = True
     z_dim: int = 128
-    use_hmod: bool = False # When true make same size batches True as well
 
     input_injection_layers: Optional[list[int]] = field(default_factory=lambda: [2, 5])
 
+@dataclass
 class BenchmarkConfig:
+    """Benchmark (non-graph) model configuration."""
     model_type: str = "hrm"
     input_dim: int = 14
     hidden_dim: int = 128
     layers: int = 6
     dropout: float = 0.12
-    n_heads = 4
-    microsteps = 2
-    n_cycles = 3
+    n_heads: int = 4
+    microsteps: int = 2
+    n_cycles: int = 3
 
 @dataclass
 class TrainingConfig:
@@ -77,14 +78,8 @@ class TrainingConfig:
     state0_json_path: str = "data/State0TrainingSet.json"
 
     # Batch sampler options
-    same_size_batches: bool = True 
+    same_size_batches: bool = True
     drop_last: bool = True  # Drop last incomplete batch
-    
-    # Legacy curriculum options (unused when combine_state0=True)
-    state0_epochs: list = field(default_factory=lambda: [])
-    lr_reduce_epoch: list = field(default_factory=lambda: [])
-    lr_reduce_factor: float = 0.5
-    mixed_ratio: float = 0.75
 
     focal_alpha: float = 0.37
     focal_gamma: float = 2.2
@@ -93,8 +88,8 @@ class TrainingConfig:
     scheduler_type: str = "cosine"  # "cosine", "plateau", "step", "none"
     cosine_t_max: int = 24
     cosine_eta_min: float = 1e-6
-    constant_lr_epochs = 0
-    constant_lr = 1e-05
+    constant_lr_epochs: int = 0
+    constant_lr: float = 1e-05
 
 @dataclass
 class DataConfig:
@@ -111,14 +106,14 @@ class ExperimentConfig:
     """Experiment tracking configuration."""
     project_name: str = "queens-puzzle-ml"
     experiment_name: Optional[str] = 'test'
-    tags: list = 'test'
+    tags: list = field(default_factory=list)
     notes: str = ""
 
     log_gradients_every_n_epochs: int = 1
     log_predictions_every_n_epochs: int = 2
     save_model_every_n_epochs: int = 10
 
-    checkpoint_dir: str = 'checkpoints/test/HRM' #"checkpoints/transformer/HRM/FullSpatial"
+    checkpoint_dir: str = 'checkpoints/test/HRM'
     log_dir: str = "logs"
 
 @dataclass
@@ -166,7 +161,7 @@ class Config:
 
 BASELINE_CONFIG = {
     "experiment": {
-        "experiment_name": "New Repo HRM ",
+        "experiment_name": "New Repo HRM",
         "tags": ["Testing", 'Graph HRM'],
         "notes": "Testing HRM model in new repository."
     }
