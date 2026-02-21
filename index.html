@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Queens GNN Solver</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #f8f9fa;
+      color: #1a1a1a;
+      line-height: 1.7;
+    }
+
+    /* ── Header ─────────────────────────────────────────────── */
+    header {
+      background: #0f172a;
+      color: #f1f5f9;
+      padding: 0 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 56px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 1px 4px rgba(0,0,0,.3);
+    }
+    header h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: .01em;
+    }
+    header a {
+      color: #94a3b8;
+      text-decoration: none;
+      font-size: .875rem;
+      display: flex;
+      align-items: center;
+      gap: .4rem;
+      transition: color .15s;
+    }
+    header a:hover { color: #f1f5f9; }
+    header a svg { flex-shrink: 0; }
+
+    /* ── Layout ──────────────────────────────────────────────── */
+    .content-wrap {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+    }
+
+    main {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 0 1.5rem 4rem;
+    }
+
+    /* ── Demo section ────────────────────────────────────────── */
+    .demo-section {
+      padding: 2.5rem 0 1.5rem;
+    }
+    .demo-section h2 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      margin-bottom: .75rem;
+      color: #0f172a;
+    }
+    .demo-section p {
+      color: #475569;
+      margin-bottom: 1.25rem;
+      font-size: .95rem;
+    }
+    .iframe-wrapper {
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 4px 24px rgba(0,0,0,.12);
+      border: 1px solid #e2e8f0;
+      background: #fff;
+    }
+    .iframe-wrapper iframe {
+      display: block;
+      width: 100%;
+      height: 750px;
+      border: none;
+    }
+    .hf-link {
+      display: inline-flex;
+      align-items: center;
+      gap: .35rem;
+      margin-top: .75rem;
+      font-size: .85rem;
+      color: #4f46e5;
+      text-decoration: none;
+    }
+    .hf-link:hover { text-decoration: underline; }
+
+    /* ── Divider ─────────────────────────────────────────────── */
+    .divider {
+      border: none;
+      border-top: 1px solid #e2e8f0;
+      margin: 2.5rem 0;
+    }
+
+    /* ── Writeup ─────────────────────────────────────────────── */
+    .writeup-container {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 2.5rem 2.75rem;
+      box-shadow: 0 2px 12px rgba(0,0,0,.06);
+      margin-top: 2rem;
+    }
+
+    /* Loading state */
+    .loading {
+      text-align: center;
+      padding: 3rem;
+      color: #94a3b8;
+      font-size: .95rem;
+    }
+    .spinner {
+      display: inline-block;
+      width: 28px;
+      height: 28px;
+      border: 3px solid #e2e8f0;
+      border-top-color: #4f46e5;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      margin-bottom: .75rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Markdown content styles ─────────────────────────────── */
+    .writeup-content h1 {
+      font-size: 1.85rem;
+      font-weight: 800;
+      margin-top: 2.5rem;
+      margin-bottom: .75rem;
+      color: #0f172a;
+      line-height: 1.25;
+      padding-bottom: .5rem;
+      border-bottom: 2px solid #e2e8f0;
+    }
+    .writeup-content h1:first-child { margin-top: 0; }
+
+    .writeup-content h2 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      margin-top: 2rem;
+      margin-bottom: .6rem;
+      color: #1e293b;
+    }
+    .writeup-content h3 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-top: 1.5rem;
+      margin-bottom: .5rem;
+      color: #334155;
+    }
+
+    .writeup-content p {
+      margin-bottom: 1rem;
+      color: #334155;
+    }
+
+    .writeup-content a {
+      color: #4f46e5;
+      text-decoration: none;
+    }
+    .writeup-content a:hover { text-decoration: underline; }
+
+    .writeup-content img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 6px;
+      border: 1px solid #e2e8f0;
+      display: block;
+      margin: 1.25rem auto;
+      box-shadow: 0 2px 8px rgba(0,0,0,.08);
+    }
+
+    /* Side-by-side image pairs */
+    .writeup-content p.img-pair {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .writeup-content p.img-pair img {
+      max-width: calc(50% - 0.5rem);
+      margin: 0;
+    }
+
+    .writeup-content table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1.25rem 0;
+      font-size: .9rem;
+      overflow-x: auto;
+      display: block;
+    }
+    .writeup-content th {
+      background: #f1f5f9;
+      color: #0f172a;
+      font-weight: 600;
+      padding: .6rem .85rem;
+      border: 1px solid #e2e8f0;
+      text-align: left;
+    }
+    .writeup-content td {
+      padding: .55rem .85rem;
+      border: 1px solid #e2e8f0;
+      color: #334155;
+    }
+    .writeup-content tr:nth-child(even) td { background: #f8fafc; }
+
+    .writeup-content code {
+      font-family: "SF Mono", "Fira Code", Menlo, Monaco, monospace;
+      font-size: .85em;
+      background: #f1f5f9;
+      padding: .15em .4em;
+      border-radius: 4px;
+      color: #c7254e;
+    }
+    .writeup-content pre {
+      background: #1e293b;
+      border-radius: 8px;
+      padding: 1.25rem;
+      overflow-x: auto;
+      margin: 1.25rem 0;
+    }
+    .writeup-content pre code {
+      background: none;
+      color: #e2e8f0;
+      padding: 0;
+      font-size: .875rem;
+    }
+
+    .writeup-content blockquote {
+      border-left: 4px solid #4f46e5;
+      padding-left: 1rem;
+      margin: 1rem 0;
+      color: #64748b;
+      font-style: italic;
+    }
+
+    .writeup-content ul, .writeup-content ol {
+      padding-left: 1.5rem;
+      margin-bottom: 1rem;
+    }
+    .writeup-content li { margin-bottom: .3rem; color: #334155; }
+
+    .writeup-content hr {
+      border: none;
+      border-top: 1px solid #e2e8f0;
+      margin: 2rem 0;
+    }
+
+    /* ── User guide ─────────────────────────────────────────── */
+    .guide {
+      margin-bottom: 1.5rem;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    .guide-block {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+    }
+    .guide-block h3 {
+      font-size: .8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: #64748b;
+      margin-bottom: .65rem;
+    }
+    .guide-block ol, .guide-block ul {
+      padding-left: 1.1rem;
+      display: flex;
+      flex-direction: column;
+      gap: .3rem;
+    }
+    .guide-block li {
+      font-size: .875rem;
+      color: #334155;
+      line-height: 1.5;
+    }
+    .guide-block li strong { color: #0f172a; }
+    .guide-note {
+      font-size: .8rem;
+      color: #64748b;
+      margin-top: .65rem;
+      line-height: 1.5;
+    }
+    .guide-tag {
+      display: inline-block;
+      font-size: .7rem;
+      font-weight: 600;
+      background: #ede9fe;
+      color: #4f46e5;
+      border-radius: 4px;
+      padding: .1em .45em;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+    @media (max-width: 640px) {
+      .guide { grid-template-columns: 1fr; }
+    }
+
+    /* ── Section nav ─────────────────────────────────────────── */
+    #section-nav {
+      position: fixed;
+      top: 50%;
+      left: max(1rem, calc(50% - 480px - 172px));
+      transform: translateY(-50%);
+      width: 152px;
+      display: none;
+      z-index: 50;
+    }
+    #section-nav ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: .1rem;
+    }
+    #section-nav li a {
+      display: block;
+      font-size: .72rem;
+      color: #94a3b8;
+      text-decoration: none;
+      padding: .25rem 0 .25rem .7rem;
+      border-left: 2px solid #e2e8f0;
+      line-height: 1.4;
+      transition: color .15s, border-color .15s;
+    }
+    #section-nav li a:hover {
+      color: #334155;
+      border-left-color: #94a3b8;
+    }
+    #section-nav li.active a {
+      color: #4f46e5;
+      border-left-color: #4f46e5;
+      font-weight: 600;
+    }
+    #section-nav li.demo-stop a {
+      font-weight: 700;
+      color: #475569;
+    }
+    #section-nav li.demo-stop.active a {
+      color: #4f46e5;
+    }
+    @media (max-width: 1280px) {
+      #section-nav { display: none !important; }
+    }
+
+    /* ── Responsive ──────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      .writeup-container { padding: 1.5rem 1.25rem; }
+      .iframe-wrapper iframe { height: 500px; }
+      .writeup-content h1 { font-size: 1.45rem; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Queens GNN Solver <span style="font-weight:400;color:#94a3b8;margin-left:.5rem">Jack Gilmore</span></h1>
+  <a href="https://github.com/jgilmore97/Queens" target="_blank" rel="noopener">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577
+               0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756
+               -1.333-1.756-1.089-.745.083-.73.083-.73 1.205.085 1.84 1.237 1.84 1.237
+               1.07 1.834 2.807 1.304 3.492.997.108-.775.418-1.305.762-1.605
+               -2.665-.3-5.466-1.332-5.466-5.93 0-1.31.467-2.38 1.235-3.22
+               -.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23A11.51 11.51 0 0 1 12
+               5.803c1.02.005 2.047.138 3.006.404 2.29-1.552 3.297-1.23 3.297-1.23.645
+               1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.807 5.625
+               -5.48 5.92.43.372.823 1.102.823 2.222 0 1.606-.015 2.898-.015 3.293
+               0 .322.216.694.825.576C20.565 21.795 24 17.295 24 12c0-6.63-5.37-12-12-12z"/>
+    </svg>
+    GitHub
+  </a>
+</header>
+
+<nav id="section-nav" aria-label="Page sections">
+  <ul id="section-nav-list"></ul>
+</nav>
+
+<main>
+
+  <!-- ── Writeup Part 1: Intro + Results Preview ─────────────── -->
+  <section class="writeup-container">
+    <div id="writeup-part1" class="writeup-content">
+      <div class="loading">
+        <div class="spinner"></div>
+        <br>Loading writeup…
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Demo (revealed after markdown loads) ─────────────────── -->
+  <section class="demo-section" id="demo-section" style="display:none">
+    <div class="content-wrap">
+      <h2 id="interactive-demo">Interactive Demo</h2>
+      <p>
+        Test out all the models below on a selection of official LinkedIn puzzles.
+      </p>
+
+      <div class="guide">
+        <div class="guide-block">
+          <h3>Controls</h3>
+          <ol>
+            <li><strong>Select Model</strong> — choose an architecture. <em>HRM (Graph)</em> is the strongest and unlocks layer visualizations.</li>
+            <li><strong>Select Puzzle</strong> — pick any puzzle from the dropdown.</li>
+            <li><strong>Load Puzzle</strong> — renders the board and runs the solver. There's a brief pause while the model computes placements.</li>
+            <li><strong>Next</strong> — place the next queen. <strong>Auto Solve</strong> — animates the full solution. <strong>Reset</strong> — start over.</li>
+          </ol>
+        </div>
+        <div class="guide-block">
+          <h3>Layer Visualizations <span class="guide-tag">HRM only</span></h3>
+          <ul>
+            <li>Active after the first <strong>Next</strong> click. Layers 1→3 correspond to early→late reasoning cycles.</li>
+            <li><strong>L Activations</strong> — per-cell response from the local graph convolution (row/column/region/diagonal constraints).</li>
+            <li><strong>H Activations</strong> — per-cell response after full-board global reasoning.</li>
+            <li><strong>H Attention</strong> — where the global transformer is attending across all cells.</li>
+          </ul>
+          <p class="guide-note">Click <strong>Board</strong> at any time to return to the standard board view.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="iframe-wrapper">
+      <iframe
+        src="https://jgilmore-queens-gnn-solver.hf.space"
+        title="Queens GNN Solver — Hugging Face Space"
+        allow="accelerometer; clipboard-write; encrypted-media; gyroscope"
+        loading="lazy"
+      ></iframe>
+    </div>
+
+    <div class="content-wrap">
+      <a class="hf-link" href="https://huggingface.co/spaces/Jgilmore/Queens_GNN_Solver" target="_blank" rel="noopener">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm0 2c5.52 0 10 4.48 10 10S17.52 22 12 22 2 17.52 2 12 6.48 2 12 2zm0 3a7 7 0 1 0 0 14A7 7 0 0 0 12 5zm0 2a5 5 0 1 1 0 10A5 5 0 0 1 12 7z"/></svg>
+        Open full space on Hugging Face ↗
+      </a>
+    </div>
+  </section>
+
+  <div class="content-wrap"><hr class="divider" /></div>
+
+  <!-- ── Writeup Part 2: Data onwards ────────────────────────── -->
+  <section class="writeup-container">
+    <div id="writeup-part2" class="writeup-content"></div>
+  </section>
+
+</main>
+
+<script>
+  function externalizeLinks(container) {
+    container.querySelectorAll('a[href]').forEach(a => {
+      if (a.hostname && a.hostname !== location.hostname) {
+        a.setAttribute('target', '_blank');
+        a.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+  }
+
+  // Paragraphs with exactly 2 images → side-by-side
+  function pairImages(container) {
+    container.querySelectorAll('p').forEach(p => {
+      const imgs = Array.from(p.querySelectorAll('img'));
+      if (imgs.length === 2 && p.querySelectorAll('*').length === imgs.length) {
+        p.classList.add('img-pair');
+      }
+    });
+  }
+
+  // Near-square standalone images → cap width so they don't dominate
+  function capSquareImages(container) {
+    container.querySelectorAll('img').forEach(img => {
+      const apply = () => {
+        if (img.closest('.img-pair')) return; // already handled
+        const ratio = img.naturalHeight / img.naturalWidth;
+        if (ratio > 0.7) img.style.maxWidth = '480px';
+      };
+      img.complete ? apply() : img.addEventListener('load', apply);
+    });
+  }
+
+  function buildSectionNav() {
+    const nav = document.getElementById('section-nav');
+    const list = document.getElementById('section-nav-list');
+    const demoH2 = document.getElementById('interactive-demo');
+    const headings = [
+      ...document.querySelectorAll('#writeup-part1 h1'),
+      ...(demoH2 ? [demoH2] : []),
+      ...document.querySelectorAll('#writeup-part2 h1'),
+    ];
+    if (headings.length === 0) return;
+
+    // Assign stable IDs from heading text
+    headings.forEach(h => {
+      if (!h.id) {
+        h.id = h.textContent.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-$/, '');
+      }
+    });
+
+    // Build nav items
+    headings.forEach(h => {
+      const li = document.createElement('li');
+      if (h.id === 'interactive-demo') li.classList.add('demo-stop');
+      const a = document.createElement('a');
+      a.href = '#' + h.id;
+      a.textContent = h.textContent.trim();
+      a.addEventListener('click', e => {
+        e.preventDefault();
+        const top = h.getBoundingClientRect().top + window.scrollY - 72;
+        window.scrollTo({ top, behavior: 'smooth' });
+      });
+      li.appendChild(a);
+      list.appendChild(li);
+    });
+
+    nav.style.display = 'block';
+
+    // Highlight the section whose heading is at or above the scroll midpoint
+    function updateActive() {
+      const threshold = window.scrollY + 80;
+      let active = headings[0];
+      for (const h of headings) {
+        if (h.getBoundingClientRect().top + window.scrollY <= threshold) active = h;
+      }
+      list.querySelectorAll('li').forEach(li => li.classList.remove('active'));
+      const link = list.querySelector(`a[href="#${active.id}"]`);
+      if (link) link.parentElement.classList.add('active');
+    }
+
+    window.addEventListener('scroll', updateActive, { passive: true });
+    updateActive();
+  }
+
+  fetch('./writeup.md')
+    .then(r => {
+      if (!r.ok) throw new Error('Could not load writeup.md');
+      return r.text();
+    })
+    .then(md => {
+      const temp = document.createElement('div');
+      temp.innerHTML = marked.parse(md);
+
+      // Find the first H1 after "Results Preview" as the split point
+      const h1s = temp.querySelectorAll('h1');
+      let splitNode = null;
+      let foundResultsPreview = false;
+      for (const h of h1s) {
+        if (h.textContent.trim() === 'Results Preview') {
+          foundResultsPreview = true;
+        } else if (foundResultsPreview) {
+          splitNode = h;
+          break;
+        }
+      }
+
+      const part1El = document.getElementById('writeup-part1');
+      const part2El = document.getElementById('writeup-part2');
+
+      if (splitNode) {
+        part1El.innerHTML = '';
+        // Move everything before splitNode into part1
+        let node = temp.firstChild;
+        while (node && node !== splitNode) {
+          const next = node.nextSibling;
+          part1El.appendChild(node);
+          node = next;
+        }
+        // Move splitNode and everything after into part2
+        while (node) {
+          const next = node.nextSibling;
+          part2El.appendChild(node);
+          node = next;
+        }
+        document.getElementById('demo-section').style.display = '';
+      } else {
+        part1El.innerHTML = temp.innerHTML;
+      }
+
+      [part1El, part2El].forEach(el => {
+        if (el) {
+          externalizeLinks(el);
+          pairImages(el);
+          capSquareImages(el);
+        }
+      });
+
+      buildSectionNav();
+    })
+    .catch(err => {
+      document.getElementById('writeup-part1').innerHTML =
+        `<p style="color:#b91c1c;padding:2rem">Failed to load writeup: ${err.message}</p>`;
+    });
+</script>
+
+</body>
+</html>
