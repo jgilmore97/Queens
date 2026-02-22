@@ -587,10 +587,6 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
             train_metrics = train_epoch(model, train_loader, criterion, optimizer, device, epoch)
 
             val_metrics = evaluate_epoch(model, val_loader, criterion, device, epoch)
-            if state0_val_loader is not None:
-                state0_val_metrics = evaluate_epoch(model, state0_val_loader, criterion, device, epoch)
-            else:
-                state0_val_metrics = None
 
             if isinstance(scheduler, ReduceLROnPlateau):
                 scheduler.step(val_metrics['f1'])
@@ -628,12 +624,9 @@ def run_training_with_tracking(model, train_loader, val_loader, config, resume_i
 
             tracker.save_checkpoint(model, optimizer, epoch, val_metrics, is_best_f1 or is_best_top1)
 
-            base_log = (f"Epoch {epoch:02d} [{current_dataset}] | "
+            base_log = (f"Epoch {epoch:02d} | "
                        f"Train: L={train_metrics['loss']:.4f} Acc={train_metrics['accuracy']:.3f} F1={train_metrics['f1']:.3f} T1={train_metrics['top1_accuracy']:.3f} | "
                        f"Val: L={val_metrics['loss']:.4f} Acc={val_metrics['accuracy']:.3f} F1={val_metrics['f1']:.3f} T1={val_metrics['top1_accuracy']:.3f}")
-
-            if state0_val_metrics is not None:
-                base_log += f" | State0-Val: Acc={state0_val_metrics['accuracy']:.3f} F1={state0_val_metrics['f1']:.3f} T1={state0_val_metrics['top1_accuracy']:.3f}"
 
             base_log += f" | LR={current_lr:.1e} | {'🎯F1' if is_best_f1 else ''}{'🎯T1' if is_best_top1 else ''}"
             logger.info(base_log)

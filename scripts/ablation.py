@@ -47,6 +47,10 @@ SHARED_CONFIG = {
     't_micro': 2,
 }
 
+PER_MODEL_OVERRIDES = {
+    'gat': {'hidden_dim': 192, 'layer_count': 10},
+}
+
 MODELS_TO_TRAIN = ['gat', 'hetero_gat', 'hrm_fullspatial', 'benchmark_hrm', 'benchmark_sequential']
 
 
@@ -348,13 +352,15 @@ def main():
         try:
             checkpoint_dir = str(CHECKPOINT_BASE_DIR / model_name)
 
+            config_overrides = {**SHARED_CONFIG, **PER_MODEL_OVERRIDES.get(model_name, {})}
+
             model, best_f1, training_time = train_model_for_ablation(
                 model_type=model_name,
                 multistate_json=DATA_PATHS['multistate_train'],
                 state0_json=DATA_PATHS['state0_train'],
                 test_json=DATA_PATHS['val'],
                 checkpoint_dir=checkpoint_dir,
-                config_overrides=SHARED_CONFIG,
+                config_overrides=config_overrides,
                 device=device
             )
 
