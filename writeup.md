@@ -167,8 +167,8 @@ The interactive demo above exposes two types of internal visualizations for the 
 
 H activations tell a more interesting story across cycles. In early cycles, the H map tends to mirror the L map in shape but with partially reversed magnitudes: this is abundantly visible in the similar cross pattern around the placed queen in the L cycle activations and in the first H cycle activation in the image below.
 
-![HRM Activations 1](images/visaulization1.png)
-![HRM Activations 2](images/visaulization2.png)
+![HRM Activations 1](images/visualization1.png)
+![HRM Activations 2](images/visualization2.png)
 
 Then in the later cycles, this structure dissolves into a more amorphous, diffuse map. The H-module has now received updated L representations across multiple rounds of exchange, with local and global information repeatedly combined, and its output reflects a more fully integrated view of the remaining board state. Rather than responding to the specific shape of queen placements, it is encoding something closer to a global summary of the solution space: which regions are still live, how constrained the remaining choices are, and where the model's confidence is settling. The result is less spatially legible but arguably more meaningful as a representation of overall board state that enables better global consequential reasoning.
 
