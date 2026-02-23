@@ -58,7 +58,7 @@ The neural model makes zero failed guesses because it never backtracks — every
 
 | Model | Parameters | Single-State F1 | Validation Set Full Solve Rate |
 |-------|------------|-----------------|--------------------------------|
-| GAT | 86K | 76.6% | 45.3% |
+| GAT | 340K | 86.0% | 68.4% |
 | HeteroGAT | 445K | 96.0% | 91.0% |
 | Ablation HRM | 359K | 99.5% | 97.9% |
 | Benchmark HRM | 446K | 92.9% | 81.5% |

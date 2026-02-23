@@ -53,15 +53,8 @@ app = [
 sweep = [
     "optuna>=3.0.0",
 ]
-dev = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-    "black>=23.0.0",
-    "ruff>=0.1.0",
-    "mypy>=1.0.0",
-]
 all = [
-    "queens-solver[app,sweep,dev]",
+    "queens-solver[app,sweep]",
 ]
 
 [project.urls]
@@ -116,7 +109,3 @@ warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-addopts = "-v --tb=short"

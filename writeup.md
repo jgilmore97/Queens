@@ -95,7 +95,7 @@ The core challenge is distinguishing Type 2 from Type 3. Both look identical fro
 
 The first model used standard Graph Attention Networks (GAT) over a homogeneous graph. All constraint edges were merged into a single edge type, and the model learned attention-weighted message passing between connected cells.
 
-This established the basic approach. The GAT has no mechanisms to decipher different edge types as separate signals; a row constraint violation and a region constraint violation produce the same attention pattern, making it harder for the model to learn specialized reasoning for each. Error analysis, like the case below, suggests the model is confined to basic single-step avoidance of Type 1 errors, with little capacity to anticipate Type 2 failures. Accordingly performance is quite poor, the model achieved 76% F1 on single-state prediction and solved only 45% of puzzles end-to-end. An example failure puzzle is shown below.
+This established the basic approach. The GAT has no mechanisms to decipher different edge types as separate signals; a row constraint violation and a region constraint violation produce the same attention pattern, making it harder for the model to learn specialized reasoning for each. Error analysis, like the case below, suggests the model is confined to basic single-step avoidance of Type 1 errors, with little capacity to anticipate Type 2 failures. Accordingly performance is quite poor, the model achieved 86% F1 on single-state prediction and solved only 68.4% of puzzles end-to-end. An example failure puzzle is shown below.
 
 ![GAT Failure](images/GAT_failure.png)
 
@@ -176,7 +176,7 @@ To validate that architectural choices matter, I trained all models under contro
 
 | Model | Parameters | Single-State F1 | Validation Set Full Solve Rate |
 |-------|------------|-----------------|-----------------|
-| GAT | 86K | 76.6% | 45.3% |
+| GAT | 340K | 86.0% | 68.4% |
 | HeteroGAT | 445K | 96.0% | 91.0% |
 | Ablation HRM | 359K | 99.5% | 97.9% |
 | Benchmark HRM | 446K | 92.9% | 81.5% |
@@ -193,13 +193,15 @@ The failure cases embedded in each model's section above illustrate what goes wr
 
 ![Failure statistics across models on the validation set](images/failure_statistics_val.png)
 
-The GAT fails early and often: 46% solve rate on the validation set, median first-mistake step of 2, and low confidence on its errors (median logit 0.35). This is a model that struggles broadly. It cannot reliably distinguish constraint types, so errors are spread across the solve sequence and the model often "knows" it's uncertain.
+The GAT fails early and often: 68.4% solve rate on the validation set, median first-mistake step of 2, and low confidence on its errors (median logit 0.35). This is a model that struggles broadly. It cannot reliably distinguish constraint types, so errors are spread across the solve sequence and the model often "knows" it's uncertain.
 
 The HeteroGAT fails less frequently (93% solve rate) and its errors shift later in the sequence (median first-mistake step of 2, but with a higher IQR ceiling). When it does fail, it tends to be more confident in its mistakes (median logit 0.67). This pattern makes sense: constraint-specific attention handles Type 1 violations well, so the model rarely fails on trivially constrained cells. Its failures come from Type 2 placements, cells that look locally legal but cause global contradictions, and the model's confidence reflects that these cells genuinely do satisfy all local constraints.
 
 The benchmark models show an interesting split. Benchmark Sequential fails at a median step of 3 with moderate confidence (0.66). Benchmark HRM fails significantly earlier: median step 2 on the validation set, and median step 1 on the test set. It's worth noting that the benchmark HRM is a simplified implementation, not a faithful reproduction of the original HRM architecture. A more complete reproduction with deeper modules, proper training tricks, and more parameters would likely perform better. But that's partly the point: graph convolutions in the L-module appear to buy significant parameter efficiency for this problem. The constraint relationships that the transformer L-module must learn from position encodings are handed to the graph L-module for free via edges, which means the graph variant can achieve strong local reasoning with far fewer parameters.
 
 The HRM fails on exactly one validation puzzle, at step 3 with a logit of 0.49, notably below its typical confidence for correct placements. The model is close to uncertain on the placement it gets wrong, which suggests it's near the boundary of what it can resolve rather than confidently incorrect.
+
+The failure rate by puzzle size chart reveals an additional pattern worth noting. The two benchmark models, both relying on positional encodings rather than explicit graph edges, show a sharp increase in failure rate at 10x10 and especially 11x11. The HeteroGAT and HRM's failure rate are less elastic to increasing board size, especially the HRM. This is likely not coincidental given that 10x10 and 11x11 boards together account for only ~12.5% of training states (see Training Set Size Distribution in the Appendix). A model that must infer constraint relationships from position alone is implicitly dependent on having seen enough examples at each board size to generalize those patterns. The graph-based L-module sidesteps this: constraint edges are defined structurally and are invariant to board size, so the graph model's edge-based reasoning transfers to larger boards without the same need for additional examples, suggesting stronger generalization across sizes.
 
 
 # Solver Comparison
@@ -262,13 +264,26 @@ The main solver comparison uses the 128-puzzle test set. Results on the 716-puzz
 | OR-Tools CP-SAT | 100% | 7.39 ms | 4.7 | 0.2 |
 | Neural (HRM) | 99.9% | 99.49 ms | NA | NA |
 
+## Training Set Size Distribution
+
+The following distribution covers the state-based training set (StateTrainingSet.json) only and does not include the additional 10,000 state-0 puzzles concatenated during training.
+
+| Size  | Count   | % of Training States |
+|-------|---------|----------------------|
+| 7x7   | 42,756  | 12.7%                |
+| 8x8   | 131,104 | 38.9%                |
+| 9x9   | 120,564 | 35.8%                |
+| 10x10 | 34,640  | 10.3%                |
+| 11x11 | 7,612   | 2.3%                 |
+| Total | 336,676 |                      |
+
 ## Failure Statistics: Test Set
 
 The failure statistics section discusses val set patterns. Test set results (128 official LinkedIn puzzles) are shown below. HRM achieves 100% on the test set and has no failure statistics to report.
 
 | Model | Accuracy | First Mistake Step (Median [IQR]) | First Mistake Logit (Median [IQR]) |
 |-------|----------|----------------------------------|-----------------------------------|
-| GAT | 59.4% (76/128) | 2.0 [1.0, 4.0] | 0.26 [0.03, 0.47] |
+| GAT | 70.3% (90/128) | 2.0 [1.0, 3.8] | 0.28 [0.10, 0.46] |
 | HeteroGAT | 95.3% (122/128) | 3.5 [2.2, 4.0] | 0.36 [0.26, 0.80] |
 | Benchmark HRM | 85.2% (109/128) | 1.0 [1.0, 3.5] | 0.61 [0.49, 0.93] |
 | Benchmark Sequential | 88.3% (113/128) | 4.0 [2.0, 5.0] | 0.70 [0.64, 0.89] |

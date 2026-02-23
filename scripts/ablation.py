@@ -47,6 +47,8 @@ SHARED_CONFIG = {
     't_micro': 2,
 }
 
+# GAT is scaled to hidden_dim=192, layer_count=10 (~340K params) so the
+# GAT vs HeteroGAT comparison isolates architectural choice rather than capacity.
 PER_MODEL_OVERRIDES = {
     'gat': {'hidden_dim': 192, 'layer_count': 10},
 }
