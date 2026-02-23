@@ -2,7 +2,7 @@
 
 # Intro
 
-Unfortunately, I am an avid player of the LinkedIn games. My favorite among them is Queens (~480 day play streak). Queens is a logical constraint propagation game that is a bit like a combination of sudoku and the n queens problem. The game features an n x n grid of square cells (between 7 and 11). Each cell has an assigned color and across the whole puzzle there will be n total colors that form contiguous regions. The objective of the game is to place n "queens" down into cells such that there is a queen in every row, column, and colored region. In addition, there cannot be multiple queens in any row, column, or region, and queens may not be in diagonally adjacent cells. All official LinkedIn boards are crafted such that there is a single unique solution to the board. 
+Unfortunately, I am an avid player of the LinkedIn games. My favorite among them is Queens (~480 day play streak). Queens is a logical constraint propagation game that is a bit like a combination of sudoku and the n queens problem. The game features an n x n grid of square cells (between 7 and 11). Each cell has an assigned color and across the whole puzzle there will be n total colors that form contiguous regions. The objective of the game is to place n "queens" down into cells such that there is a queen in every row, column, and colored region. In addition, there cannot be multiple queens in any row, column, or region, and queens may not be in diagonally adjacent cells. All official LinkedIn boards are crafted such that there is a single unique solution to the board. The descriptor "constraint propagation" come from each placement you make narrowing down where remaining pieces can legally go, so the puzzle solves itself progressively as earlier decisions eliminate options for later ones.
 
 ![Empty Queens Puzzle](images/unsolved.png)
 ![Completed Queens Puzzle](images/solved.png)
@@ -29,11 +29,11 @@ Rotational augmentation is straightforward. Each puzzle can be rotated 0, 90, 18
 
 Region mutation is more involved. Starting from a solved puzzle, the algorithm randomly grows or shrinks region boundaries by reassigning cells to neighboring regions. Each individual mutation must maintain the contiguity of the regions, i.e. a new cell must not create separate regions of the same color.
 
-![Visualization of a single cell mutation](images/mutation_example.png)
+![Visualization of a single cell mutation](images/mutation_example.jpeg)
 
 Prior to mutation beginning, I randomly set a difference threshold with bounds between 18% and 45%, and mutation ends when the child board is sufficiently different from its parent board (count of cells different from the parent divided by the total cell count). The difference bounds were set with empirical experimentation to ensure label boards between the parent and child were notably different. By the nature of Queens, we expect that these differences in label board ensure that there is little risk for memorization of a parent enabling solving of a child board. Additionally, I validate solvability and uniqueness by running an exhaustive solution counter, backtracking guarantees finding all solutions, so the counter stops early if it finds more than one and only boards with exactly one valid solution are accepted. Through this iterative mutation process, a single seed puzzle can spawn many children, each a valid Queens puzzle with its own solution. Once a parent provides a child board, I remove that parent from the set that is eligible for mutation and add the child board to the mutation eligible set in its stead.
 
-![Progression of a parent board to a child and then a child of that child, highlighting the impact on the label positions](images/3_puzzle_mutation_lineage_showing_label_changes.png)
+![Progression of a parent board to a child and then a child of that child, highlighting the impact on the label positions](images/3_puzzle_mutation_lineage_showing_label_changes.jpeg)
 
 A Queens puzzle with n queens has n+1 meaningful board states: the empty board, then each intermediate state after placing 1, 2, ... n-1 queens, and finally the solved state. Each intermediate state presents a different prediction problem: given the current partial solution, which remaining cells are valid for the next queen? By decomposing each puzzle into its progressive states, 10,000 puzzles become roughly 350,000 training examples. This decomposition into states is also meaningful for how the model will function. Instead of taking in an empty puzzle as input and returning all queens in one pass, the model will take in a partially filled board and predict where the very next queen should go. This means when the model is used for inference it will be used autoregressively and the output of the last pass will be used as the input for the next pass. 
 
@@ -71,6 +71,8 @@ With constraints encoded in structure, the model can learn specialized attention
 
 ![One can see the varied constraint types that will not fit into a basic spacial bound](images/graph_motivation.png)
 
+The above image shows the propagations of constraints from different queen placements. It is evident that the varied spatial patterns that come from different constraint types would not map well to the fixed receptive field of a CNN, and would require a large number of parameters for a transformer to learn, but are naturally encoded in the graph structure with a fewer parameters.
+
 ## Message Passing
 
 Graph neural networks operate through message passing. Each node (cell) holds a feature vector, initially the 14-dimensional input described above. In a single message-passing step, every node collects the feature vectors of its neighbors, aggregates them (typically through a weighted sum), and uses the result to update its own representation. After one step, each node's representation encodes information about itself and its immediate neighbors. After two steps, it encodes its two-hop neighborhood, and so on.
@@ -78,6 +80,8 @@ Graph neural networks operate through message passing. Each node (cell) holds a 
 The "attention" in Graph Attention Networks (GAT) refers to how this aggregation is weighted. Rather than treating all neighbors equally, the model learns attention coefficients that determine how much influence each neighbor's message has on the receiving node. For Queens, this means a cell can learn to attend strongly to neighbors that contain queens (which constrain it) and weakly to empty neighbors in the same row, or any other reasonable weighting reason.
 
 ![And one can see a visualization of the edge types connecting the nodes for a sample board](images/example_edges_visualized.png)
+
+The right image above shows the edge connections that link the cells together in the puzzle on the left. Note that the blue circles (left image) are the representations of the square cells (right image).
 
 # Model Architecture: From GAT to HRM
 
