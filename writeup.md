@@ -5,7 +5,6 @@
 Unfortunately, I am an avid player of the LinkedIn games. My favorite among them is Queens (~480 day play streak). Queens is a logical constraint propagation game that is a bit like a combination of sudoku and the n queens problem. The game features an n x n grid of square cells (between 7 and 11). Each cell has an assigned color and across the whole puzzle there will be n total colors that form contiguous regions. The objective of the game is to place n "queens" down into cells such that there is a queen in every row, column, and colored region. In addition, there cannot be multiple queens in any row, column, or region, and queens may not be in diagonally adjacent cells. All official LinkedIn boards are crafted such that there is a single unique solution to the board. The descriptor "constraint propagation" come from each placement you make narrowing down where remaining pieces can legally go, so the puzzle solves itself progressively as earlier decisions eliminate options for later ones.
 
 ![Empty Queens Puzzle](images/unsolved.png)
-
 ![Completed Queens Puzzle](images/solved.png)
 
 During my daily plays, I developed an interest to see if I could train a neural network to successfully play Queens. This article will document the process of developing this model and share the performance results. 

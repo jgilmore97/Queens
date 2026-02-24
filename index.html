@@ -508,12 +508,17 @@
     });
   }
 
-  // Paragraphs with exactly 2 images → side-by-side
+  // Paragraphs with exactly 2 images → side-by-side (only if both are portrait/square)
   function pairImages(container) {
     container.querySelectorAll('p').forEach(p => {
       const imgs = Array.from(p.querySelectorAll('img'));
       if (imgs.length === 2 && p.querySelectorAll('*').length === imgs.length) {
-        p.classList.add('img-pair');
+        const checkAndPair = () => {
+          if (!imgs.every(img => img.complete)) return;
+          const eitherLandscape = imgs.some(img => img.naturalWidth > img.naturalHeight * 1.3);
+          if (!eitherLandscape) p.classList.add('img-pair');
+        };
+        imgs.forEach(img => img.complete ? checkAndPair() : img.addEventListener('load', checkAndPair));
       }
     });
   }
