@@ -232,6 +232,29 @@ class Solver:
             else:
                 result['H']['final'] = self._compute_single_activation(H_states[0], n, activation_metric)
 
+        H_attentions = intermediates.get('H_attentions')
+        if H_attentions is not None and len(H_attentions) > 0:
+            result['H_attention'] = self._process_attention(H_attentions, n)
+
+        return result
+
+    def _process_attention(self, attentions: list, n: int) -> dict:
+        """Convert H_attentions to per-cycle per-cell attention heatmaps.
+
+        Each attention tensor is [B, num_heads, C, C]. We average over heads and
+        query positions to get a [C] vector of 'how much each cell is attended to',
+        then reshape to [n, n] and normalise to [0, 1].
+        """
+        names = ['early', 'mid', 'late'] if len(attentions) >= 3 else \
+                ['early', 'late']         if len(attentions) == 2 else ['late']
+        result = {}
+        for attn, name in zip(attentions, names):
+            attn_np = attn.squeeze(0).mean(dim=0).mean(dim=0).numpy()  # [C]
+            heatmap = attn_np.reshape(n, n).astype(np.float32)
+            lo, hi = heatmap.min(), heatmap.max()
+            if hi > lo:
+                heatmap = (heatmap - lo) / (hi - lo)
+            result[name] = heatmap
         return result
 
     def _compute_single_activation(self, state: torch.Tensor, n: int,
@@ -318,7 +341,7 @@ class Solver:
                 }
                 batch = _SingleBatch(node_features, edge_index_dict_formatted, self.device)
                 if capture_activations:
-                    logits, intermediates = self.model(batch, return_intermediates=True)
+                    logits, intermediates = self.model(batch, return_intermediates=True, return_attention=True)
                     activation_dict = self._process_intermediates(intermediates, n, activation_metric)
                 else:
                     logits = self.model(batch)
@@ -390,6 +413,7 @@ class Solver:
         queen_board = np.zeros((n, n), dtype=int)
         edge_index_dict = self._build_edge_index(region_board)
         activations = [] if capture_activations else None
+        placement_order = []
         queens_placed = 0
 
         while queens_placed < n:
@@ -401,18 +425,16 @@ class Solver:
                 return_logits=need_logits
             )
 
+            act_dict = None
+            logits_np = None
             if capture_activations and need_logits:
                 _, _, _, act_dict, logits_np = result
-                activations.append(act_dict)
             elif capture_activations:
                 row, col, top_logit, act_dict = result
-                activations.append(act_dict)
-                logits_np = None
             elif need_logits:
                 _, _, _, logits_np = result
             else:
                 row, col, top_logit = result
-                logits_np = None
 
             if batch_placement:
                 rows, cols, logits = self._get_high_confidence_placements(
@@ -425,6 +447,11 @@ class Solver:
 
                 queen_board[rows, cols] = 1
                 queens_placed += len(rows)
+                placement_order.extend(zip(rows.tolist(), cols.tolist()))
+
+                if act_dict is not None:
+                    act_dict['queens'] = list(zip(rows.tolist(), cols.tolist()))
+                    activations.append(act_dict)
 
                 logger.debug(f"Placed {len(rows)} queens with logits: {logits}")
             else:
@@ -438,10 +465,15 @@ class Solver:
                 logger.debug(f"Placing queen at: ({row}, {col}) with logit score: {top_logit:.3f}")
                 queen_board[row, col] = 1
                 queens_placed += 1
+                placement_order.append((row, col))
+
+                if act_dict is not None:
+                    act_dict['queens'] = [(row, col)]
+                    activations.append(act_dict)
 
         if capture_activations:
-            return queen_board, activations
-        return queen_board
+            return queen_board, placement_order, activations
+        return queen_board, placement_order
 
     @staticmethod
     def solve_with_vanilla_backtracking(puzzle: dict):
@@ -638,6 +670,6 @@ class Solver:
         return overlay
 
     def evaluate_solver(self, puzzle: dict) -> bool:
-        model_solution = self.solve_puzzle(puzzle)
+        model_solution, _ = self.solve_puzzle(puzzle)
         backtrack_solution = self.solve_with_vanilla_backtracking(puzzle)
         return np.array_equal(model_solution, backtrack_solution)

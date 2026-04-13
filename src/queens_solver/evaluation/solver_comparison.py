@@ -215,7 +215,7 @@ def solve_neural(region: np.ndarray, solver) -> SolverResult:
     start = time.perf_counter()
     puzzle = {'region': region.tolist()}
     try:
-        solution = solver.solve_puzzle(puzzle, batch_placement=True)
+        solution, _ = solver.solve_puzzle(puzzle, batch_placement=True)
         elapsed = (time.perf_counter() - start) * 1000
         solved = verify_solution(region, solution)
         return SolverResult(solved, solution, elapsed, guesses=0)

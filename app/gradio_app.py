@@ -153,14 +153,14 @@ def start_solving(show_activations):
     
     # Solve with activation capture
     if show_activations:
-        solution, activations = solver.solve_puzzle(
+        solution, placement_order, activations = solver.solve_puzzle(
             current_puzzle,
             capture_activations=True,
             activation_metric='max_embedding'
         )
         current_activations = activations
     else:
-        solution = solver.solve_puzzle(
+        solution, placement_order = solver.solve_puzzle(
             current_puzzle,
             capture_activations=False
         )
