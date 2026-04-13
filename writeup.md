@@ -15,6 +15,20 @@ It is important to clarify what this project is and is not trying to accomplish.
 
 The final model, a Hierarchical Reasoning Model built on graph neural networks, solves 100% of a held-out test set of 128 official LinkedIn puzzles and 99.9% of a larger validation set. While the graph structure encodes which cells are related by constraints, the model learns what to do with those relationships entirely from training data. Unlike traditional solvers that guess and backtrack (a basic backtracking solver averages about 1,000 guesses per puzzle), the model relies entirely on learned predictions and does not backtrack incorrect placements.
 
+# Chrome Extension
+
+Beyond the model itself, I adapted the solver into a Chrome extension that solves live LinkedIn puzzles directly in the browser, achieving recorded times under one second.
+
+The extension runs in developer mode only and will not be submitted to the Chrome Web Store. This is intentional. Chrome's extension policies prohibit tools that automate gameplay or simulate user input on third-party sites, and LinkedIn's terms of service prohibit bots and automated interactions with the platform regardless of context. Distributing it publicly would conflict with both. It exists as a technical proof of concept and a personal tool.
+
+The architecture is straightforward. A local FastAPI server loads the trained HRM weights on startup, downloading them from HuggingFace Hub and caching locally on first run. A content script injected on LinkedIn pages extracts the puzzle by reading `aria-label` attributes on each cell — LinkedIn's own accessibility markup encodes the color name, row, and column of every cell in plain text, making DOM parsing the most reliable extraction method and eliminating any need for computer vision at this stage. The extracted region matrix is sent to the local server, inference runs, and the server returns the model's placement sequence. The content script then simulates double-click events on each target cell. The full pipeline from button press to completed board takes well under a second on a modern CPU, the majority of which is the click animation delay rather than inference.
+
+The extension also renders a real-time visualization overlay on the right side of the screen during solving. Three heatmaps update as each forward pass completes: the L-module activation norms (local constraint propagation), the H-module hidden state norms (global reasoning), and the H-module transformer attention weights (which cells the model attends to globally). This makes the model's reasoning at least partially legible while it works.
+
+As a side benefit, each puzzle solved through the extension is automatically saved to a local JSON file in the same format as the training data, passively collecting new official LinkedIn puzzles over time.
+
+*[GIF of browser solve — to be added]*
+
 # Data
 
 The first challenge was getting training data. LinkedIn does not provide an API for Queens puzzles, so I took screenshots of puzzles from my phone and extracted them programmatically. Generally only one puzzle is released per day but I was able to collect many puzzles rapidly from https://www.archivedqueens.com/ so thank you to them for their archiving work. Otherwise I expanded the set with a screenshot of the daily puzzle. Ultimately my seed set was 180 puzzles.

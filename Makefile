@@ -1,4 +1,4 @@
-.PHONY: install install-dev lint format test train app clean help
+.PHONY: install install-dev lint format test train app server clean help
 
 # Default target
 help:
@@ -11,6 +11,7 @@ help:
 	@echo "  make test         Run tests"
 	@echo "  make train        Run HRM training"
 	@echo "  make app          Launch Gradio web interface"
+	@echo "  make server       Start local inference server for Chrome extension"
 	@echo "  make clean        Remove build artifacts"
 	@echo ""
 
@@ -45,6 +46,11 @@ sweep:
 # Web app
 app:
 	python app/gradio_app.py
+
+# Local inference server for the browser extension
+# Weights are downloaded automatically from HuggingFace on first run
+server:
+	.venv/bin/uvicorn server.app:app --reload --host 127.0.0.1 --port 8000
 
 # Cleanup
 clean:

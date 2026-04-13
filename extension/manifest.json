@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Queens Solver",
+  "version": "1.0.0",
+  "description": "Solve LinkedIn Queens puzzles using a trained neural network.",
+
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "http://localhost:8000/*"
+  ],
+
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Queens Solver"
+  }
+}
