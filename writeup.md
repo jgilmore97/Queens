@@ -27,7 +27,8 @@ The extension also renders a real-time visualization overlay on the right side o
 
 As a side benefit, each puzzle solved through the extension is automatically saved to a local JSON file in the same format as the training data, passively collecting new official LinkedIn puzzles over time.
 
-*[GIF of browser solve — to be added]*
+![Gif of extension solve 1](images/extension_solve_1.gif)
+![Gif of extension solve 2](images/extension_solve_2.gif)
 
 # Data
 
